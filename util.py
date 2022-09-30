@@ -1,26 +1,16 @@
+import json
+
+import nltk
+import numpy as np
 import torch
 import torch.nn.functional as F
-import json
-import os
-import nltk
 from nltk import tokenize
-import torch
-import numpy as np
 
 nltk.download('punkt')
 
-import sys
-import os
-if os.path.isdir('/var/karen'):
-    os.environ['TRANSFORMERS_CACHE'] = '/var/karen/workspace/Refinement-Generation/cache'
-    sys.path.insert(0, '/var/karen/workspace/Refinement-Generation/')
-
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from tqdm import tqdm
 from difflib import SequenceMatcher
 
 from bleuloss import batch_log_bleulosscnn_ae
-from util import *
 
 
 def embed_inputs(embedding, logits, x_onehot=None, z_onehot=None, device='cuda'):

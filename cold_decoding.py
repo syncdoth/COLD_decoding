@@ -1,16 +1,15 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import os
-import numpy as np
-import time
-import wandb
 import argparse
-
+import os
 import sys
-sys.path.insert(0, './GPT2ForwardBackward')
+import time
 
 import nltk
+import numpy as np
+import wandb
+
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('averaged_perceptron_tagger')
@@ -18,11 +17,10 @@ nltk.download('averaged_perceptron_tagger')
 from nltk import tokenize
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-from util import *
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from bleuloss import batch_log_bleulosscnn_ae
-from modeling_opengpt2 import OpenGPT2LMHeadModel
+from util import *
 
 stop_words = set(stopwords.words('english'))
 
@@ -776,6 +774,8 @@ def main():
     tokenizer = GPT2Tokenizer.from_pretrained(args.pretrained_model)
 
     if args.use_back_model:
+        sys.path.insert(0, './GPT2ForwardBackward')
+        from modeling_opengpt2 import OpenGPT2LMHeadModel
         model_back = OpenGPT2LMHeadModel.from_pretrained(
             args.back_model, hidden_dropout_prob=0, attention_probs_dropout_prob=0, summary_first_dropout=0)
         model_back.to(device)
