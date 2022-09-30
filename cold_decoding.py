@@ -46,8 +46,7 @@ def options():
     parser.add_argument("--input-file", type=str,
                         default="./data/lexical/commongen_data/test.multi.constraint.json")
     parser.add_argument("--output-dir", type=str, default="./data/commongen/")
-    parser.add_argument("--fwd-model", type=str,
-                        default="/var/karen/workspace/GPT2ForwardBackward/opengpt2_pytorch_forward")
+    parser.add_argument("--use-back-model", action='store_true')
     parser.add_argument("--back-model", type=str,
                         default="danyaljj/opengpt2_pytorch_backward")
     parser.add_argument("--version", type=str, default="")
@@ -253,7 +252,7 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
             top_k_filter_3d(y_logits_t / args.output_lgt_temp, args.topk, extra_mask=z_mask),
             y_logits_ / args.input_lgt_temp)
 
-        if args.lr_nll_portion == 1.0:
+        if args.lr_nll_portion == 1.0 or model_back is None:
             rl_nll_loss = lr_nll_loss
         else:
             # add right-to-left model (rl)
@@ -776,23 +775,26 @@ def main():
     # Load tokenizer
     tokenizer = GPT2Tokenizer.from_pretrained(args.pretrained_model)
 
-    model_back = OpenGPT2LMHeadModel.from_pretrained(
-        args.back_model, hidden_dropout_prob=0, attention_probs_dropout_prob=0, summary_first_dropout=0)
-    model_back.to(device)
-    model_back.eval()
-    # Freeze GPT-2 weights
-    for param in model_back.parameters():
-        param.requires_grad = False
+    if args.use_back_model:
+        model_back = OpenGPT2LMHeadModel.from_pretrained(
+            args.back_model, hidden_dropout_prob=0, attention_probs_dropout_prob=0, summary_first_dropout=0)
+        model_back.to(device)
+        model_back.eval()
+        # Freeze GPT-2 weights
+        for param in model_back.parameters():
+            param.requires_grad = False
+    else:
+        model_back = None
 
 
     if "counterfactual" in args.mode:
-        counterfactual_reasoning(model, tokenizer, device, args, model_back)
+        counterfactual_reasoning(model, tokenizer, device, args, model_back=model_back)
     if "abductive" in args.mode:
-        abductive_reasoning(model, tokenizer, device, args, model_back)
+        abductive_reasoning(model, tokenizer, device, args, model_back=model_back)
     if "lexical" in args.mode:
-        lexical_generation(model, tokenizer, device, args, model_back)
+        lexical_generation(model, tokenizer, device, args, model_back=model_back)
     if "grammar" in args.mode:
-        grammar_correction(model, tokenizer, device, args, model_back)
+        grammar_correction(model, tokenizer, device, args, model_back=model_back)
 
 
 if __name__ == "__main__":
