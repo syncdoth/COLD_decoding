@@ -13,59 +13,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch open-GPT-2 model.
+"""PyTorch OpenAI GPT-2 model.
 
-NOTE: This code is based on Huggingface gpt2 v4.2.1. Original Code can be found at:
-
-https://github.com/peterwestuw/GPT2ForwardBackward
-
-This is included for the use of backward GPT2, whose model card is
-`danyaljj/opengpt2_pytorch_backward`.
-
-(note by Sehyun)
+NOTE: This is added to this repo just for reference. (Sehyun)
 """
 
 import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-import math
-
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
-from transformers.activations import ACT2FN
-
-from transformers.file_utils import (
-    ModelOutput,
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    replace_return_docstrings,
-)
-
-from transformers.modeling_outputs import (
-    BaseModelOutputWithPastAndCrossAttentions,
-    CausalLMOutputWithCrossAttentions,
-    SequenceClassifierOutputWithPast,
-)
-
-from transformers.modeling_utils import (
-    Conv1D,
-    PreTrainedModel,
-    SequenceSummary,
-    find_pruneable_heads_and_indices,
-    prune_conv1d_layer,
-)
-
-from transformers.utils import logging
-from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
-
-from configuration_opengpt2 import OpenGPT2Config
-
-## PETER: replaced these relative imports with imports from the package (above)
-'''
 from ...activations import ACT2FN
 from ...file_utils import (
     ModelOutput,
@@ -88,8 +48,7 @@ from ...modeling_utils import (
 )
 from ...utils import logging
 from ...utils.model_parallel_utils import assert_device_map, get_device_map
-'''
-
+from .configuration_gpt2 import GPT2Config
 
 
 logger = logging.get_logger(__name__)
@@ -168,37 +127,28 @@ class Attention(nn.Module):
     def __init__(self, nx, n_ctx, config, scale=False, is_cross_attention=False):
         super().__init__()
 
-        # don't allow cross attention for now
-        assert(not is_cross_attention)
-
         n_state = nx  # in Attention: n_state=768 (nx=n_embd)
         # [switch nx => n_state from Block to Attention to keep identical to TF implem]
-        assert n_state % config.num_attention_heads == 0
+        assert n_state % config.n_head == 0
         self.register_buffer(
             "bias", torch.tril(torch.ones((n_ctx, n_ctx), dtype=torch.uint8)).view(1, 1, n_ctx, n_ctx)
         )
         self.register_buffer("masked_bias", torch.tensor(-1e4))
-        self.n_head = config.num_attention_heads
+        self.n_head = config.n_head
         self.split_size = n_state
         self.scale = scale
         self.is_cross_attention = is_cross_attention
         if self.is_cross_attention:
-            assert(False) # PETER: not allowed in this version
-            #self.c_attn = Conv1D(2 * n_state, nx)
-            #self.q_attn = Conv1D(n_state, nx)
+            self.c_attn = Conv1D(2 * n_state, nx)
+            self.q_attn = Conv1D(n_state, nx)
         else:
-            # PETER: opengpt2/grover breaks c_attn into 3 convolutions
-            self.c_attn_q = Conv1D(n_state, nx)
-            self.c_attn_k = Conv1D(n_state, nx)
-            self.c_attn_v = Conv1D(n_state, nx)
+            self.c_attn = Conv1D(3 * n_state, nx)
         self.c_proj = Conv1D(n_state, nx)
-        self.attn_dropout = nn.Dropout(config.attention_probs_dropout_prob)
-        self.resid_dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.attn_dropout = nn.Dropout(config.attn_pdrop)
+        self.resid_dropout = nn.Dropout(config.resid_pdrop)
         self.pruned_heads = set()
 
     def prune_heads(self, heads):
-        assert(False) # PETER: not implemented for opengpt2 (code below still uses gpt2 params)
-
         if len(heads) == 0:
             return
         heads, index = find_pruneable_heads_and_indices(
@@ -221,31 +171,21 @@ class Attention(nn.Module):
             w = w / (float(v.size(-1)) ** 0.5)
         nd, ns = w.size(-2), w.size(-1)
 
-        ## good up to here
-
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
-            nd, ns = w.size(-2), w.size(-1)
-            b = self.bias[:, :, ns-nd:ns, :ns]
-            w = w * b - 1e4 * (1 - b)
-
-            # PETER: this was the huggingface code, replaced with mine above to match Grover code
-            #mask = self.bias[:, :, ns - nd : ns, :ns]
-            #w = torch.where(mask.bool(), w, self.masked_bias.to(w.dtype))
+            mask = self.bias[:, :, ns - nd : ns, :ns]
+            w = torch.where(mask.bool(), w, self.masked_bias.to(w.dtype))
 
         if attention_mask is not None:
             # Apply the attention mask
             w = w + attention_mask
 
         w = nn.Softmax(dim=-1)(w)
+        w = self.attn_dropout(w)
 
-        # PETER: not included in Grover tf code
-        #w = self.attn_dropout(w)
-
-        # PETER: not included in Grover tf code
         # Mask heads if we want to
-#        if head_mask is not None:
-#            w = w * head_mask
+        if head_mask is not None:
+            w = w * head_mask
 
         outputs = (torch.matmul(w, v),)
         if output_attentions:
@@ -277,9 +217,6 @@ class Attention(nn.Module):
         output_attentions=False,
     ):
         if encoder_hidden_states is not None:
-            assert(False) # PETER: for now, encoder_hidden_states functionality is not included
-
-
             assert hasattr(
                 self, "q_attn"
             ), "If class is used as cross attention, the weights `q_attn` have to be defined. Please make sure to instantiate class with `Attention(..., is_cross_attention=True)`."
@@ -287,12 +224,7 @@ class Attention(nn.Module):
             key, value = self.c_attn(encoder_hidden_states).split(self.split_size, dim=2)
             attention_mask = encoder_attention_mask
         else:
-            query, key, value = self.c_attn_q(hidden_states), self.c_attn_k(hidden_states), self.c_attn_v(hidden_states)
-
-            # PETER: replacing below code with above (to handle Conv1D difference
-            #query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
-
-
+            query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
 
         query = self.split_heads(query)
         key = self.split_heads(key, k=True)
@@ -307,9 +239,7 @@ class Attention(nn.Module):
         else:
             present = None
 
-
         attn_outputs = self._attn(query, key, value, attention_mask, head_mask, output_attentions)
-
         a = attn_outputs[0]
 
         a = self.merge_heads(a)
@@ -319,53 +249,33 @@ class Attention(nn.Module):
         return (a, present) + attn_outputs[1:]  # a, present, (attentions)
 
 
-# PETER: added this for the residual_MLP below
-def gelu(x):
-    cdf = 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
-    return x * cdf
-
-# PETER: this is rewritten, different enough from MLP (in original OpenAI gpt2) to
-# just write it from scratch
-class residual_MLP(nn.Module):
-    def __init__(self, intermediate_size, config):  # in MLP: n_state=3072 (4 * n_embd)
-        super(residual_MLP, self).__init__()
-        nx = config.hidden_size
-
-        self.act = gelu
-        self.linear_intermediate = nn.Linear(nx, intermediate_size)
-        self.linear_output = nn.Linear(intermediate_size,nx)
-        self.ln_0 = nn.LayerNorm(nx, eps=1e-5)
-        self.ln_1 = nn.LayerNorm(nx, eps=1e-5)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+class MLP(nn.Module):
+    def __init__(self, n_state, config):  # in MLP: n_state=3072 (4 * n_embd)
+        super().__init__()
+        nx = config.n_embd
+        self.c_fc = Conv1D(n_state, nx)
+        self.c_proj = Conv1D(nx, n_state)
+        self.act = ACT2FN[config.activation_function]
+        self.dropout = nn.Dropout(config.resid_pdrop)
 
     def forward(self, x):
-        x_norm = self.ln_0(x)
-        intermediate = self.act(self.linear_intermediate(x_norm))
-        output_for_resid = self.dropout(self.linear_output(intermediate))
-        layer_output = self.ln_1(x + output_for_resid)
-        return layer_output
-
+        h = self.act(self.c_fc(x))
+        h2 = self.c_proj(h)
+        return self.dropout(h2)
 
 
 class Block(nn.Module):
     def __init__(self, n_ctx, config, scale=False):
         super().__init__()
-        hidden_size = config.hidden_size
-
-        # PETER: changed this to match grover config
-        inner_dim = config.intermediate_size #config.n_inner if config.n_inner is not None else 4 * hidden_size
-        # self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
+        hidden_size = config.n_embd
+        inner_dim = config.n_inner if config.n_inner is not None else 4 * hidden_size
+        self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.attn = Attention(hidden_size, n_ctx, config, scale)
-        # self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
-
-        # PETER: just removed the cross-attention option below
+        self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         if config.add_cross_attention:
-            assert(False)
-        #    self.crossattention = Attention(hidden_size, n_ctx, config, scale, is_cross_attention=True)
-        #    self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
-
-        # PETER: using our redisual_MLP
-        self.mlp = residual_MLP(config.intermediate_size, config) # MLP(inner_dim, config)
+            self.crossattention = Attention(hidden_size, n_ctx, config, scale, is_cross_attention=True)
+            self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
+        self.mlp = MLP(inner_dim, config)
 
     def forward(
         self,
@@ -378,36 +288,21 @@ class Block(nn.Module):
         use_cache=False,
         output_attentions=False,
     ):
-
         attn_outputs = self.attn(
-            hidden_states,
+            self.ln_1(hidden_states),
             layer_past=layer_past,
             attention_mask=attention_mask,
             head_mask=head_mask,
             use_cache=use_cache,
             output_attentions=output_attentions,
         )
-
-        # PETER: this code is replaced with above,
-        #attn_outputs = self.attn(
-        #    self.ln_1(hidden_states),
-        #    layer_past=layer_past,
-        #    attention_mask=attention_mask,
-        #    head_mask=head_mask,
-        #    use_cache=use_cache,
-        #    output_attentions=output_attentions,
-        #)
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
-
-
         outputs = attn_outputs[1:]
         # residual connection
         hidden_states = attn_output + hidden_states
 
         if encoder_hidden_states is not None:
             # add one self-attention block for cross-attention
-            assert(False) # PETER: for now, encoder_hidden_states functionality is not included
-
             assert hasattr(
                 self, "crossattention"
             ), f"If `encoder_hidden_states` are passed, {self} has to be instantiated with cross-attention layers by setting `config.add_cross_attention=True`"
@@ -424,30 +319,25 @@ class Block(nn.Module):
             hidden_states = hidden_states + attn_output
             outputs = outputs + cross_attn_outputs[2:]  # add cross attentions if we output attention weights
 
-        feed_forward_hidden_states = self.mlp(hidden_states)
-
-        # PETER: replaced this code with above, because no layer-norm here in Grover code
-        #feed_forward_hidden_states = self.mlp(self.ln_2(hidden_states))
-
-        # PETER: we don't do this residual connection in Grover
+        feed_forward_hidden_states = self.mlp(self.ln_2(hidden_states))
         # residual connection
-        #hidden_states = hidden_states + feed_forward_hidden_states
+        hidden_states = hidden_states + feed_forward_hidden_states
 
         if use_cache:
-            outputs = (feed_forward_hidden_states,) + outputs
+            outputs = (hidden_states,) + outputs
         else:
-            outputs = (feed_forward_hidden_states,) + outputs[1:]
+            outputs = (hidden_states,) + outputs[1:]
 
         return outputs  # hidden_states, present, (attentions, cross_attentions)
 
 
-class OpenGPT2PreTrainedModel(PreTrainedModel):
+class GPT2PreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
     """
 
-    config_class = OpenGPT2Config
+    config_class = GPT2Config
     load_tf_weights = load_tf_weights_in_gpt2
     base_model_prefix = "transformer"
     is_parallelizable = True
@@ -469,7 +359,7 @@ class OpenGPT2PreTrainedModel(PreTrainedModel):
 
 
 @dataclass
-class OpenGPT2DoubleHeadsModelOutput(ModelOutput):
+class GPT2DoubleHeadsModelOutput(ModelOutput):
     """
     Base class for outputs of models predicting if two sentences are consecutive or not.
 
@@ -510,7 +400,7 @@ class OpenGPT2DoubleHeadsModelOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
-OpenGPT2_START_DOCSTRING = r"""
+GPT2_START_DOCSTRING = r"""
 
     This model inherits from :class:`~transformers.PreTrainedModel`. Check the superclass documentation for the generic
     methods the library implements for all its model (such as downloading or saving, resizing the input embeddings,
@@ -521,13 +411,13 @@ OpenGPT2_START_DOCSTRING = r"""
     general usage and behavior.
 
     Parameters:
-        config (:class:`~transformers.OpenGPT2Config`): Model configuration class with all the parameters of the model.
+        config (:class:`~transformers.GPT2Config`): Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the weights associated with the model, only the
             configuration. Check out the :meth:`~transformers.PreTrainedModel.from_pretrained` method to load the model
             weights.
 """
 
-OpenGPT2_INPUTS_DOCSTRING = r"""
+GPT2_INPUTS_DOCSTRING = r"""
     Args:
         input_ids (:obj:`torch.LongTensor` of shape :obj:`(batch_size, input_ids_length)`):
             :obj:`input_ids_length` = ``sequence_length`` if :obj:`past_key_values` is ``None`` else
@@ -613,7 +503,7 @@ PARALLELIZE_DOCSTRING = r"""
     Example::
 
             # Here is an example of a device map on a machine with 4 GPUs using gpt2-xl, which has a total of 48 attention modules:
-            model = OpenGPT2LMHeadModel.from_pretrained('gpt2-xl')
+            model = GPT2LMHeadModel.from_pretrained('gpt2-xl')
             device_map = {0: [0, 1, 2, 3, 4, 5, 6, 7, 8],
 
                           1: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
@@ -627,7 +517,7 @@ DEPARALLELIZE_DOCSTRING = r"""
     Example::
 
         # On a 4 GPU machine with gpt2-large:
-        model = OpenGPT2LMHeadModel.from_pretrained('gpt2-large')
+        model = GPT2LMHeadModel.from_pretrained('gpt2-large')
         device_map = {0: [0, 1, 2, 3, 4, 5, 6, 7],
 
                     1: [8, 9, 10, 11, 12, 13, 14, 15],
@@ -639,32 +529,18 @@ DEPARALLELIZE_DOCSTRING = r"""
 
 
 @add_start_docstrings(
-    "The bare OpenGPT2 Model transformer outputting raw hidden-states without any specific head on top.",
-    OpenGPT2_START_DOCSTRING,
+    "The bare GPT2 Model transformer outputting raw hidden-states without any specific head on top.",
+    GPT2_START_DOCSTRING,
 )
-class OpenGPT2Model(OpenGPT2PreTrainedModel):
+class GPT2Model(GPT2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
 
-
-        self.output_hidden_states = True #config.output_hidden_states
-        self.output_attentions = True #config.output_attentions
-
-
-        self.wte = nn.Embedding(config.vocab_size, config.hidden_size)#config.n_embd)
-        self.wpe = nn.Embedding(config.max_position_embeddings, config.hidden_size)#  n_positions, config.n_embd)
-        self.drop = nn.Dropout(config.hidden_dropout_prob) #embd_pdrop)
-        self.h = nn.ModuleList([Block(config.max_position_embeddings, config, scale=True) for _ in range(config.num_hidden_layers)])
-        self.ln_embed = nn.LayerNorm(config.hidden_size, eps=1e-5)#
-
-        # PETER: replaced the below block with above (to match Grover config)
-
-        #self.wte = nn.Embedding(config.vocab_size, config.n_embd)
-        #self.wpe = nn.Embedding(config.n_positions, config.n_embd)
-        #self.drop = nn.Dropout(config.embd_pdrop)
-        #self.h = nn.ModuleList([Block(config.n_ctx, config, scale=True) for _ in range(config.n_layer)])
-        #self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
-
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.wpe = nn.Embedding(config.n_positions, config.n_embd)
+        self.drop = nn.Dropout(config.embd_pdrop)
+        self.h = nn.ModuleList([Block(config.n_ctx, config, scale=True) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
 
         self.init_weights()
         # Model parallel
@@ -689,7 +565,7 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
                 cuda_device = "cuda:" + str(k)
                 self.h[block] = self.h[block].to(cuda_device)
         # ln_f to last
-        self.ln_embed = self.ln_embed.to(self.last_device)
+        self.ln_f = self.ln_f.to(self.last_device)
 
     @add_start_docstrings(DEPARALLELIZE_DOCSTRING)
     def deparallelize(self):
@@ -701,7 +577,7 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
         self.wpe = self.wpe.to("cpu")
         for index in range(len(self.h)):
             self.h[index] = self.h[index].to("cpu")
-        self.ln_embed = self.ln_embed.to("cpu")
+        self.ln_f = self.ln_f.to("cpu")
         torch.cuda.empty_cache()
 
     def get_input_embeddings(self):
@@ -717,7 +593,7 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    @add_start_docstrings_to_model_forward(OpenGPT2_INPUTS_DOCSTRING)
+    @add_start_docstrings_to_model_forward(GPT2_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="gpt2",
@@ -808,7 +684,7 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
         # 1.0 in head_mask indicate we keep the head
         # attention_probs has shape bsz x n_heads x N x N
         # head_mask has shape n_layer x batch x n_heads x N x N
-        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
+        head_mask = self.get_head_mask(head_mask, self.config.n_layer)
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
@@ -816,11 +692,8 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
         hidden_states = inputs_embeds + position_embeds
 
         if token_type_ids is not None:
-            print('TOKEN TYPES')
             token_type_embeds = self.wte(token_type_ids)
             hidden_states = hidden_states + token_type_embeds
-
-        hidden_states = self.ln_embed(hidden_states)
 
         hidden_states = self.drop(hidden_states)
 
@@ -831,6 +704,7 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
         all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
         all_hidden_states = () if output_hidden_states else None
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
+
             # Model parallel
             if self.model_parallel:
                 torch.cuda.set_device(hidden_states.device)
@@ -890,10 +764,7 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
                     if i == v[-1] and "cuda:" + str(k) != self.last_device:
                         hidden_states = hidden_states.to("cuda:" + str(k + 1))
 
-        # PETER: actually, ln_embed should be applied way earlier...
-        #hidden_states = self.ln_embed(hidden_states)
-        # PETER: replaced below line with above for naming purposes
-        # hidden_states = self.ln_f(hidden_states)
+        hidden_states = self.ln_f(hidden_states)
 
         hidden_states = hidden_states.view(*output_shape)
         # Add last hidden state
@@ -914,18 +785,18 @@ class OpenGPT2Model(OpenGPT2PreTrainedModel):
 
 @add_start_docstrings(
     """
-    The OpenGPT2 Model transformer with a language modeling head on top (linear layer with weights tied to the input
+    The GPT2 Model transformer with a language modeling head on top (linear layer with weights tied to the input
     embeddings).
     """,
-    OpenGPT2_START_DOCSTRING,
+    GPT2_START_DOCSTRING,
 )
-class OpenGPT2LMHeadModel(OpenGPT2PreTrainedModel):
+class GPT2LMHeadModel(GPT2PreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"h\.\d+\.attn\.masked_bias", r"lm_head\.weight"]
 
     def __init__(self, config):
         super().__init__(config)
-        self.transformer = OpenGPT2Model(config)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.transformer = GPT2Model(config)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         self.init_weights()
 
@@ -985,7 +856,7 @@ class OpenGPT2LMHeadModel(OpenGPT2PreTrainedModel):
             "token_type_ids": token_type_ids,
         }
 
-    @add_start_docstrings_to_model_forward(OpenGPT2_INPUTS_DOCSTRING)
+    @add_start_docstrings_to_model_forward(GPT2_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="gpt2",
@@ -1066,18 +937,18 @@ class OpenGPT2LMHeadModel(OpenGPT2PreTrainedModel):
 
 @add_start_docstrings(
     """
-The OpenGPT2 Model transformer with a language modeling and a multiple-choice classification head on top e.g. for
+The GPT2 Model transformer with a language modeling and a multiple-choice classification head on top e.g. for
 RocStories/SWAG tasks. The two heads are two linear layers. The language modeling head has its weights tied to the
 input embeddings, the classification head takes as input the input of a specified classification token index in the
 input sequence).
 """,
-    OpenGPT2_START_DOCSTRING,
+    GPT2_START_DOCSTRING,
 )
-class OpenGPT2DoubleHeadsModel(OpenGPT2PreTrainedModel):
+class GPT2DoubleHeadsModel(GPT2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         config.num_labels = 1
-        self.transformer = OpenGPT2Model(config)
+        self.transformer = GPT2Model(config)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.multiple_choice_head = SequenceSummary(config)
 
@@ -1118,8 +989,8 @@ class OpenGPT2DoubleHeadsModel(OpenGPT2PreTrainedModel):
             "token_type_ids": token_type_ids,
         }
 
-    @add_start_docstrings_to_model_forward(OpenGPT2_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=OpenGPT2DoubleHeadsModelOutput, config_class=_CONFIG_FOR_DOC)
+    @add_start_docstrings_to_model_forward(GPT2_INPUTS_DOCSTRING)
+    @replace_return_docstrings(output_type=GPT2DoubleHeadsModelOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         input_ids=None,
@@ -1156,10 +1027,10 @@ class OpenGPT2DoubleHeadsModel(OpenGPT2PreTrainedModel):
         Example::
 
             >>> import torch
-            >>> from transformers import OpenGPT2Tokenizer, OpenGPT2DoubleHeadsModel
+            >>> from transformers import GPT2Tokenizer, GPT2DoubleHeadsModel
 
-            >>> tokenizer = OpenGPT2Tokenizer.from_pretrained('gpt2')
-            >>> model = OpenGPT2DoubleHeadsModel.from_pretrained('gpt2')
+            >>> tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+            >>> model = GPT2DoubleHeadsModel.from_pretrained('gpt2')
 
             >>> # Add a [CLS] to the vocabulary (we should train it also!)
             >>> num_added_tokens = tokenizer.add_special_tokens({'cls_token': '[CLS]'})
@@ -1216,7 +1087,7 @@ class OpenGPT2DoubleHeadsModel(OpenGPT2PreTrainedModel):
                 output = (mc_loss,) + output
             return ((lm_loss,) + output) if lm_loss is not None else output
 
-        return OpenGPT2DoubleHeadsModelOutput(
+        return GPT2DoubleHeadsModelOutput(
             loss=lm_loss,
             mc_loss=mc_loss,
             logits=lm_logits,
@@ -1229,9 +1100,9 @@ class OpenGPT2DoubleHeadsModel(OpenGPT2PreTrainedModel):
 
 @add_start_docstrings(
     """
-    The OpenGPT2 Model transformer with a sequence classification head on top (linear layer).
+    The GPT2 Model transformer with a sequence classification head on top (linear layer).
 
-    :class:`~transformers.OpenGPT2ForSequenceClassification` uses the last token in order to do the classification, as
+    :class:`~transformers.GPT2ForSequenceClassification` uses the last token in order to do the classification, as
     other causal models (e.g. GPT-1) do.
 
     Since it does classification on the last token, it requires to know the position of the last token. If a
@@ -1240,20 +1111,20 @@ class OpenGPT2DoubleHeadsModel(OpenGPT2PreTrainedModel):
     guess the padding tokens when :obj:`inputs_embeds` are passed instead of :obj:`input_ids`, it does the same (take
     the last value in each row of the batch).
     """,
-    OpenGPT2_START_DOCSTRING,
+    GPT2_START_DOCSTRING,
 )
-class OpenGPT2ForSequenceClassification(OpenGPT2PreTrainedModel):
+class GPT2ForSequenceClassification(GPT2PreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"h\.\d+\.attn\.masked_bias", r"lm_head\.weight"]
 
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.transformer = OpenGPT2Model(config)
+        self.transformer = GPT2Model(config)
         self.score = nn.Linear(config.n_embd, self.num_labels, bias=False)
 
         self.init_weights()
 
-    @add_start_docstrings_to_model_forward(OpenGPT2_INPUTS_DOCSTRING)
+    @add_start_docstrings_to_model_forward(GPT2_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="microsoft/dialogrpt",
