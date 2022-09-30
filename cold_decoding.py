@@ -375,7 +375,7 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
                     noise_std = large_gs_stds[ni]
 
                 noise = torch.normal(mean=args.gs_mean, std=noise_std, size=epsilon.size(),
-                                     device='cuda', requires_grad=False)
+                                     device=device, requires_grad=False)
                 if args.win_anneal_iters >= 0 and iter >= args.win_anneal_iters:
                     zeros = torch.zeros_like(noise)
                     noise_mix = torch.cat([zeros[:, :frozen_len], noise[:, frozen_len:]], dim=1)
