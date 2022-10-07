@@ -348,6 +348,7 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
 
     return ppl_last, text, text_post
 
+
 def right_context_pred_constraint(model, args, z_t, z_onehot, y_logits_, soft_forward_x):
     soft_forward_y_ = (y_logits_.detach() / 0.3 - y_logits_).detach() + y_logits_
     xyz_logits, xy_length = soft_forward_xyz(model, soft_forward_x, soft_forward_y_, z_onehot)
@@ -365,6 +366,7 @@ def right_context_pred_constraint(model, args, z_t, z_onehot, y_logits_, soft_fo
                 z_t.view(-1))
     c_loss_1 = c_loss_1.view(args.batch_size, -1).mean(-1)
     return c_loss_1
+
 
 def fluency_constraint(model,
                        args,
@@ -603,33 +605,6 @@ def grammar_correction(model, tokenizer, device, args, model_back=None):
     print("outputs: %s" % outfile)
 
 
-
-def _get_adverbs_and_nnps(z_words):
-    pos = nltk.pos_tag(z_words)
-    adverbs = [w[0] for w in pos if 'RB' in w[1]]
-    nnps = [w[0] for w in pos if 'NNP' in w[1]]
-    return adverbs, nnps
-
-def _get_keywords(z, x, args):
-    stop_words = set(stopwords.words('english'))
-    z_words = word_tokenize(z)
-    z_adverbs, z_nnps = _get_adverbs_and_nnps(z_words)
-    ret_words = []
-    for w in z_words:
-        if w in z_nnps:
-            if w not in ret_words:
-                ret_words.append(w)
-        else:
-            w = w.lower()
-            if w not in stop_words and w.isalnum() and w not in z_adverbs and w not in ret_words:
-                ret_words.append(w)
-
-    if args.abductive_filterx:
-        x_words = word_tokenize(x)
-        ret_words = [w for w in ret_words if w not in x_words]
-
-    return ' '.join(ret_words)
-
 def abductive_reasoning(model, tokenizer, device, args, model_back=None):
     with open(args.input_file, 'r') as f:
         lines = f.readlines()
@@ -671,7 +646,7 @@ def abductive_reasoning(model, tokenizer, device, args, model_back=None):
         else:
             x = d["obs1"].strip()
         z = d["obs2"].strip()
-        z_keywords = _get_keywords(z, d["obs1"].strip(), args)
+        z_keywords = get_keywords(z, d["obs1"].strip(), args)
 
         if ' '.join([x, z]) in procssed:
             continue

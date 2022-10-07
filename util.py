@@ -7,6 +7,9 @@ import torch.nn.functional as F
 from nltk import tokenize
 
 nltk.download('punkt')
+nltk.download('stopwords')
+
+from nltk.corpus import stopwords
 
 from difflib import SequenceMatcher
 
@@ -704,3 +707,29 @@ def rank_and_filter(candidates, input_text, z, model, tokenizer, device, no_loss
     return gens_complete_reorder_top[0]
 
 
+def get_adverbs_and_nnps(z_words):
+    pos = nltk.pos_tag(z_words)
+    adverbs = [w[0] for w in pos if 'RB' in w[1]]
+    nnps = [w[0] for w in pos if 'NNP' in w[1]]
+    return adverbs, nnps
+
+
+def get_keywords(z, x, args):
+    stop_words = set(stopwords.words('english'))
+    z_words = tokenize.word_tokenize(z)
+    z_adverbs, z_nnps = get_adverbs_and_nnps(z_words)
+    ret_words = []
+    for w in z_words:
+        if w in z_nnps:
+            if w not in ret_words:
+                ret_words.append(w)
+        else:
+            w = w.lower()
+            if w not in stop_words and w.isalnum() and w not in z_adverbs and w not in ret_words:
+                ret_words.append(w)
+
+    if args.abductive_filterx:
+        x_words = tokenize.word_tokenize(x)
+        ret_words = [w for w in ret_words if w not in x_words]
+
+    return ' '.join(ret_words)
