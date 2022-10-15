@@ -1,7 +1,7 @@
 import torch
 
 from bleuloss import batch_log_bleulosscnn_ae
-from util import soft_backward, soft_forward, soft_forward_xyz, soft_nll, top_k_filter_3d
+from util import embed_inputs, soft_backward, soft_forward, soft_forward_xyz, soft_nll, top_k_filter_3d
 
 
 def right_context_pred_constraint(model, args, z_encoded, z_onehot, y_logits_t, soft_forward_x):
@@ -121,3 +121,46 @@ def sentence_ngram_similarity_constraint(y_logits_t, target_sent_id, max_ngram=4
                                          target_idx=target_sent_id,
                                          ngram_list=list(range(2, max_ngram + 1)))
     return ngram_sim
+
+
+def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_model_past,
+                                 expert_layer_names, expert_units, expert_refs, args,
+                                 only_last_token=False, mask_t=None, z_mask=None):
+    # get response of all expert neurons
+    soft_forward_y = y_logits_ / 0.001
+    if args.straight_through:
+        if mask_t is None:
+            soft_forward_y = (y_logits_.detach() / 0.001 - y_logits_).detach() + y_logits_
+        else:
+            soft_forward_y = top_k_filter_3d(y_logits_, args.topk, mask=mask_t, extra_mask=z_mask) / 0.001
+
+    xy_embeds = embed_inputs(
+        model_wrapper.module.get_input_embeddings().weight,
+        soft_forward_y,
+        x_onehot=soft_forward_x,
+        device=soft_forward_x.device
+    )
+    input_batch = {'past_key_values': x_model_past, 'input_embeds': xy_embeds}
+    # collect response during soft forward
+    response_batch = model_wrapper.run_inference(inputs=input_batch, outputs=expert_layer_names)
+
+    # all_vals.shape = [n_layer, U]
+    references = []
+    current_activations = []
+    for layer_name, unit, ref in zip(expert_layer_names, expert_units, expert_refs):
+        if only_last_token:
+                    # [B, U]
+            curr_expert_act = response_batch[layer_name][:, -1, unit]
+            ref = ref.view(1, -1)  # [1, U]
+        else:
+                    # [B, T, U]
+            curr_expert_act = response_batch[layer_name][:, :, unit]
+            ref = ref.view(1, 1, -1) # [1, 1, U]
+        current_activations.append(curr_expert_act)
+        references.append(ref)
+
+    current_activations = torch.cat(current_activations, -1)  # [B, U] or [B, T, U]
+    references = torch.cat(references, -1)  # [1, U] or [1, 1, U]
+
+    expert_loss = torch.nn.functional.mse_loss(current_activations, references)
+    return expert_loss
