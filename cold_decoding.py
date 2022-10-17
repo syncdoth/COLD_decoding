@@ -81,7 +81,9 @@ def options():
                         default=0,
                         help="length of optimization window in sequence.")
     parser.add_argument("--constraint-weight", type=float, default=0.1)
-    parser.add_argument("--abductive-c2-weight", type=float, default=0.05)
+    parser.add_argument("--sentence_ngram_weight", type=float, default=1.0)
+    parser.add_argument("--right_context_pred_weight", type=float, default=1.0)
+    parser.add_argument("--keyword_weight", type=float, default=0.05)
     parser.add_argument("--abductive-filterx",
                         action="store_true",
                         help="filter out keywords included in x")
@@ -295,20 +297,17 @@ def decode(model,
                                                 extra_mask=z_mask)
             sent_ngram_loss = sentence_ngram_similarity_constraint(
                 filtered_y_logits, z_encoded, max_ngram=args.counterfactual_max_ngram)
-            # TODO: --sentence_ngram_weight
             constraint_loss["sentence_ngram"] = sent_ngram_loss * args.sentence_ngram_weight
 
         if "right_context_pred" in constraint_functions:
             # right-context prediction constraint
             r_pred_loss = right_context_pred_constraint(model, args, z_encoded, z_onehot,
                                                         y_logits_t, soft_forward_x)
-            # TODO: --right_context_pred_weight
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
         if "keyword" in constraint_functions:
             # right-context n-gram similarity constraint
             kw_loss = keyword_lexical_constraint(y_logits, keywords_encoded)
-            # TODO: --keyword_weight
             constraint_loss["keyword"] = kw_loss * args.keyword_weight
 
         c_loss = sum(constraint_loss.values())
@@ -535,7 +534,7 @@ def abductive_reasoning(model, tokenizer, device, args, model_back=None):
                   args.end,
                   args.mode,
                   args.constraint_weight,
-                  args.abductive_c2_weight,
+                  args.keyword_weight,
                   args.lr_nll_portion,
                   args.length,
                   args.topk,
@@ -618,7 +617,7 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
                   args.end,
                   args.mode,
                   args.constraint_weight,
-                  args.abductive_c2_weight,
+                  args.keyword_weight,
                   args.lr_nll_portion,
                   args.length,
                   args.topk,
