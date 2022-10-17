@@ -340,8 +340,7 @@ def decode(model,
         if args.wandb:
             wandb.log({
                 "Loss": loss.item(),
-                "left-to-right nll loss": lr_nll_loss.item(),
-                "right-to-left nll loss": rl_nll_loss.item(),
+                "fluency loss": fluency_loss.item(),
                 "constraint loss": c_loss,
                 "Gassian_Noise_STD": noise_std,
                 "LR": last_lr,
