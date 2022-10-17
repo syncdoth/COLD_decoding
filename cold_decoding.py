@@ -163,13 +163,10 @@ def decode(model,
     """
     model.eval()
 
-    assert prompt is not None  # TODO: make this possible
+    prompt = "<|endoftext|>" if prompt is None else prompt
     x_encoded = torch.tensor(tokenizer.encode(prompt), dtype=torch.long)
     x_encoded = x_encoded.unsqueeze(0).repeat(args.batch_size, 1)  # [B, T]
     x_onehot = one_hot(x_encoded, dimension=tokenizer.vocab_size)  # [B, T, V]
-
-    z_mask = None
-    length = args.length
 
     assert sent_constraint is not None  # TODO: make this possible
     # delete the "." token we appended before
@@ -177,6 +174,7 @@ def decode(model,
     z_encoded = z_encoded.unsqueeze(0).repeat(args.batch_size, 1)  # [B, T]
     z_onehot = one_hot(z_encoded, dimension=tokenizer.vocab_size)  # [B, T, V]
 
+    length = args.length
     if length <= 0:
         length = z_encoded.shape[1] - length
 
@@ -641,8 +639,6 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
         print(d["concept_set"])
         constraints = ' '.join(d["concept_set"].split("#"))
 
-        x = "<|endoftext|>"
-
         print("%d / %d" % (i, len(data)))
         print('Output to: \t', outfile)
 
@@ -652,7 +648,7 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
             ppl_last, text, text_post = decode(model,
                                                tokenizer,
                                                device,
-                                               prompt=x,
+                                               prompt=None,
                                                sent_constraint=". " + constraints,
                                                keyword_constraint=constraints,
                                                constraint_functions=('right_context_pred',
