@@ -1,7 +1,6 @@
 import torch
 
-from util import (soft_backward, soft_forward, soft_forward_xyz, soft_nll,
-                  top_k_filter_3d)
+from util import soft_backward, soft_forward, soft_forward_xyz, soft_nll, top_k_filter_3d
 
 
 def right_context_pred_constraint(model, args, z_t, z_onehot, y_logits_, soft_forward_x):
@@ -71,10 +70,11 @@ def fluency_constraint(model,
             yz_logits_rev_rev_t_ = yz_logits_rev_rev_t[:, :y_logits_.shape[1], :]
 
             tmp_logits = yz_logits_rev_rev_t_
-            repetition_mask = torch.cat(
-                [torch.softmax(tmp_logits[:, 1:, :], dim=-1),
-                 torch.zeros_like(tmp_logits[:, -1:, :])],
-                dim=1)
+            repetition_mask = torch.cat([
+                torch.softmax(tmp_logits[:, 1:, :], dim=-1),
+                torch.zeros_like(tmp_logits[:, -1:, :])
+            ],
+                                        dim=1)
             yz_logits_rev_rev_t_ = yz_logits_rev_rev_t_ - repetition_mask * 1e4
             yz_logits_rev_rev_t_ = yz_logits_rev_rev_t_.detach()
 

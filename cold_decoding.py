@@ -24,9 +24,8 @@ from nltk.tokenize import word_tokenize
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 from bleuloss import batch_log_bleulosscnn_ae
-from util import (decode_with_model_topk, freeze_module, get_keywords,
-                  get_text_from_logits, initialize, one_hot, post_process,
-                  post_sent, rank_and_filter, top_k_filter_3d)
+from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
+                  initialize, one_hot, post_process, post_sent, rank_and_filter, top_k_filter_3d)
 
 stop_words = set(stopwords.words('english'))
 
@@ -43,55 +42,97 @@ def options():
     parser.add_argument("--straight-through", action="store_true")
     parser.add_argument("--topk", type=int, default=0)
     parser.add_argument("--rl-topk", type=int, default=0)
-    parser.add_argument("--lexical", type=str, default='max', choices=['max', 'ppl_max', 'all', 'bleu'])
+    parser.add_argument("--lexical",
+                        type=str,
+                        default='max',
+                        choices=['max', 'ppl_max', 'all', 'bleu'])
     parser.add_argument("--lexical-variants", action="store_true", help="")
     parser.add_argument("--if-zx", action="store_true")
     ## experiment
-    parser.add_argument("--input-file", type=str,
+    parser.add_argument("--input-file",
+                        type=str,
                         default="./data/lexical/commongen_data/test.multi.constraint.json")
     parser.add_argument("--output-dir", type=str, default="./data/commongen/")
     parser.add_argument("--use-back-model", action='store_true')
-    parser.add_argument("--back-model", type=str,
-                        default="danyaljj/opengpt2_pytorch_backward")
+    parser.add_argument("--back-model", type=str, default="danyaljj/opengpt2_pytorch_backward")
     parser.add_argument("--version", type=str, default="")
     parser.add_argument("--start", type=int, default=1, help="loading data from ith examples.")
     parser.add_argument("--end", type=int, default=10, help="loading data util ith examples.")
-    parser.add_argument("--repeat-batch", type=int, default=1, help="loading data util ith examples.")
-    parser.add_argument("--mode", type=str, default='constrained_langevin',
-                        choices=['lexical_generation', 'counterfactual_langevin', 'abductive_langevin',
-                                  'grammar'])
+    parser.add_argument("--repeat-batch",
+                        type=int,
+                        default=1,
+                        help="loading data util ith examples.")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default='constrained_langevin',
+        choices=['lexical_generation', 'counterfactual_langevin', 'abductive_langevin', 'grammar'])
     ## model
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--length", type=int, default=15, help="maximum length of optimized logits.")
-    parser.add_argument("--max-length", type=int, default=50, help="maximum length of complete sentence.")
-    parser.add_argument("--frozen-length", type=int, default=0, help="length of optimization window in sequence.")
+    parser.add_argument("--length",
+                        type=int,
+                        default=15,
+                        help="maximum length of optimized logits.")
+    parser.add_argument("--max-length",
+                        type=int,
+                        default=50,
+                        help="maximum length of complete sentence.")
+    parser.add_argument("--frozen-length",
+                        type=int,
+                        default=0,
+                        help="length of optimization window in sequence.")
     parser.add_argument("--constraint-weight", type=float, default=0.1)
     parser.add_argument("--abductive-c2-weight", type=float, default=0.05)
-    parser.add_argument("--abductive-filterx", action="store_true", help="filter out keywords included in x")
+    parser.add_argument("--abductive-filterx",
+                        action="store_true",
+                        help="filter out keywords included in x")
     parser.add_argument("--lr-nll-portion", type=float, default=1)
     parser.add_argument("--prefix-length", type=int, default=0, help="length of prefix.")
     parser.add_argument("--counterfactual-max-ngram", type=int, default=6)
     parser.add_argument("--no-loss-rerank", action="store_true", help="")
     # temperature
-    parser.add_argument("--input-lgt-temp", type=float, default=1,
+    parser.add_argument("--input-lgt-temp",
+                        type=float,
+                        default=1,
                         help="temperature of logits used for model input.")
-    parser.add_argument("--output-lgt-temp", type=float, default=1,
+    parser.add_argument("--output-lgt-temp",
+                        type=float,
+                        default=1,
                         help="temperature of logits used for model output.")
-    parser.add_argument("--rl-output-lgt-temp", type=float, default=1,
+    parser.add_argument("--rl-output-lgt-temp",
+                        type=float,
+                        default=1,
                         help="temperature of logits used for model output.")
-    parser.add_argument("--init-temp", type=float, default=0.1,
-                        help="temperature of logits used in the initialization pass. High => uniform init.")
+    parser.add_argument(
+        "--init-temp",
+        type=float,
+        default=0.1,
+        help="temperature of logits used in the initialization pass. High => uniform init.")
     parser.add_argument("--init-mode", type=str, default='random', choices=['random', 'original'])
     # lr
-    parser.add_argument("--stepsize", type=float, default=0.1, help="learning rate in the backward pass.")
+    parser.add_argument("--stepsize",
+                        type=float,
+                        default=0.1,
+                        help="learning rate in the backward pass.")
     parser.add_argument("--stepsize-ratio", type=float, default=1, help="")
     parser.add_argument("--stepsize-iters", type=int, default=1000, help="")
     # iterations
     parser.add_argument("--num-iters", type=int, default=1000)
-    parser.add_argument("--min-iters", type=int, default=0, help="record best only after N iterations")
-    parser.add_argument("--noise-iters", type=int, default=1, help="add noise at every N iterations")
-    parser.add_argument("--win-anneal-iters", type=int, default=-1, help="froze the optimization window after N iters")
-    parser.add_argument("--constraint-iters", type=int, default=1000,
+    parser.add_argument("--min-iters",
+                        type=int,
+                        default=0,
+                        help="record best only after N iterations")
+    parser.add_argument("--noise-iters",
+                        type=int,
+                        default=1,
+                        help="add noise at every N iterations")
+    parser.add_argument("--win-anneal-iters",
+                        type=int,
+                        default=-1,
+                        help="froze the optimization window after N iters")
+    parser.add_argument("--constraint-iters",
+                        type=int,
+                        default=1000,
                         help="add one more group of constraints from N iters")
     # gaussian noise
     parser.add_argument("--gs_mean", type=float, default=0.0)
@@ -103,7 +144,15 @@ def options():
     return args
 
 
-def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, model_back=None, zz=None):
+def decode(model,
+           tokenizer,
+           device,
+           x="",
+           z="",
+           constraints=None,
+           args=None,
+           model_back=None,
+           zz=None):
     '''
     x: left context   (prompt in lexical lexical task)
     z: optimization target  (original ending in counterfactual task)
@@ -132,12 +181,14 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
         if length <= 0:
             length = z_t.shape[1] - length
         if args.verbose:
-            print("x:\t|%s|\nz:\t|%s|\nlength:\t%d\nconstraints:\t%s" % (
-                tokenizer.decode(x_), tokenizer.decode(z_), length, constraints))
+            print("x:\t|%s|\nz:\t|%s|\nlength:\t%d\nconstraints:\t%s" %
+                  (tokenizer.decode(x_), tokenizer.decode(z_), length, constraints))
 
         # z_mask: [batch_size, vocab_size]
         z_words = word_tokenize(z[2:])  # delete the ". " token we appended before
-        z_nonstop_words = [w.lower() for w in z_words if w.lower() not in stop_words and w.isalnum()]
+        z_nonstop_words = [
+            w.lower() for w in z_words if w.lower() not in stop_words and w.isalnum()
+        ]
         z_nonstop_words += [z_words[0]]  # add the first token
         z_nonstop_words = ' ' + ' '.join(z_nonstop_words)
         z_nonstop_ = tokenizer.encode(z_nonstop_words)
@@ -168,8 +219,8 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
         z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
 
         if args.verbose:
-            print("x:\t|%s|\nz:\t|%s|\nzz:\t|%s|\nconstraints:\t%s" % (
-                tokenizer.decode(x_), tokenizer.decode(z_), tokenizer.decode(zz_), constraints))
+            print("x:\t|%s|\nz:\t|%s|\nzz:\t|%s|\nconstraints:\t%s" %
+                  (tokenizer.decode(x_), tokenizer.decode(z_), tokenizer.decode(zz_), constraints))
 
     model.eval()
 
@@ -180,24 +231,27 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
         init_logits = z_onehot / 0.1
         init_logits = init_logits[:, :length, :]
         if length > init_logits.shape[1]:
-            init_logits = torch.cat(
-                [init_logits,
-                 torch.zeros([args.batch_size, length - init_logits.shape[1], tokenizer.vocab_size], device=device)],
-                dim=1)
+            init_logits = torch.cat([
+                init_logits,
+                torch.zeros([args.batch_size, length - init_logits.shape[1], tokenizer.vocab_size],
+                            device=device)
+            ],
+                                    dim=1)
     text, _, _ = get_text_from_logits(init_logits, tokenizer)
     for bi in range(args.batch_size):
         print("[initial]: %s" % (text[bi]))
 
     if args.wandb:
-        wandb.init(
-            project='args.mode' + str(int(round(time.time() * 1000))),
-            config=args)
+        wandb.init(project='args.mode' + str(int(round(time.time() * 1000))), config=args)
 
     assert args.prefix_length <= 0  # Otherwise not compatible with batch mode
 
     if args.prefix_length > 0:
         prefix_logits = torch.nn.Parameter(
-            torch.rand(x_onehot.shape[0], args.prefix_length, x_onehot.shape[2], dtype=init_logits.dtype,
+            torch.rand(x_onehot.shape[0],
+                       args.prefix_length,
+                       x_onehot.shape[2],
+                       dtype=init_logits.dtype,
                        device=device))
 
     y_logits = init_logits
@@ -206,7 +260,8 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
         optim = torch.optim.Adam([epsilon, prefix_logits], lr=args.stepsize)
     else:
         optim = torch.optim.Adam([epsilon], lr=args.stepsize)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optim, step_size=args.stepsize_iters,
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optim,
+                                                step_size=args.stepsize_iters,
                                                 gamma=args.stepsize_ratio)
 
     frozen_len = args.frozen_length
@@ -249,21 +304,22 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
         # n-gram similarity constraint
         if "counterfactual" in args.mode:
             c_loss = batch_log_bleulosscnn_ae(
-                decoder_outputs=top_k_filter_3d(y_logits_, args.topk, mask=mask_t, extra_mask=z_mask).transpose(0, 1),
+                decoder_outputs=top_k_filter_3d(y_logits_,
+                                                args.topk,
+                                                mask=mask_t,
+                                                extra_mask=z_mask).transpose(0, 1),
                 target_idx=z_t,
-                ngram_list=list(range(2, args.counterfactual_max_ngram + 1))
-            )
+                ngram_list=list(range(2, args.counterfactual_max_ngram + 1)))
 
         if "abductive" in args.mode or "lexical" in args.mode:
             # right-context prediction constraint
-            c_loss_1 = right_context_pred_constraint(model, args, z_t, z_onehot, y_logits_, soft_forward_x)
+            c_loss_1 = right_context_pred_constraint(model, args, z_t, z_onehot, y_logits_,
+                                                     soft_forward_x)
 
             # right-context n-gram similarity constraint
-            c_loss_2 = batch_log_bleulosscnn_ae(
-                decoder_outputs=y_logits_.transpose(0, 1),
-                target_idx=zz_t,
-                ngram_list=[1]
-            )
+            c_loss_2 = batch_log_bleulosscnn_ae(decoder_outputs=y_logits_.transpose(0, 1),
+                                                target_idx=zz_t,
+                                                ngram_list=[1])
             c_loss = c_loss_1 + args.abductive_c2_weight * c_loss_2
 
         loss = (1.0 - args.constraint_weight) * args.lr_nll_portion * lr_nll_loss \
@@ -277,19 +333,26 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
             scheduler.step()  # turn off the scheduler
             last_lr = scheduler.get_last_lr()[0]
 
-        if args.verbose and ((iter + 1) % args.print_every == 0 or iter == 0 or iter + 1 == args.num_iters):
-            text, _, _ = decode_with_model_topk(
-                model, y_logits_, args.topk, soft_forward_x, x_model_past, tokenizer, extra_mask=z_mask)
+        if args.verbose and ((iter + 1) % args.print_every == 0 or iter == 0 or
+                             iter + 1 == args.num_iters):
+            text, _, _ = decode_with_model_topk(model,
+                                                y_logits_,
+                                                args.topk,
+                                                soft_forward_x,
+                                                x_model_past,
+                                                tokenizer,
+                                                extra_mask=z_mask)
             for bi in range(args.batch_size):
                 if "abductive" in args.mode or "lexical" in args.mode:
                     print(
-                        "%d, loss: %.4f, lr_nll_loss: %.4f, rl_nll_loss: %.4f,  c_loss_2: %.4f, lr: %.4f, |%s|" % (
-                            iter + 1, loss.item(), lr_nll_loss[bi].item(), rl_nll_loss[bi].item(),
-                            c_loss_2[bi].item(), last_lr, text[bi]))
+                        "%d, loss: %.4f, lr_nll_loss: %.4f, rl_nll_loss: %.4f,  c_loss_2: %.4f, lr: %.4f, |%s|"
+                        % (iter + 1, loss.item(), lr_nll_loss[bi].item(), rl_nll_loss[bi].item(),
+                           c_loss_2[bi].item(), last_lr, text[bi]))
                     # print("%d, loss: %.4f, lr_nll_loss: %.4f, rl_nll_loss: %.4f, c_loss_1: %.4f, c_loss_2: %.4f, lr: %.4f, |%s|" % (iter + 1, loss.item(), lr_nll_loss[bi].item(), rl_nll_loss[bi].item(), c_loss_1[bi].item(), c_loss_2[bi].item(), last_lr, text[bi]))
                 else:
-                    print("%d, loss: %.4f, lr_nll_loss: %.4f, c_loss: %.4f, lr: %.4f, |%s|" % (
-                    iter + 1, loss.item(), lr_nll_loss[bi].item(), c_loss[bi].item(), last_lr, text[bi]))
+                    print("%d, loss: %.4f, lr_nll_loss: %.4f, c_loss: %.4f, lr: %.4f, |%s|" %
+                          (iter + 1, loss.item(), lr_nll_loss[bi].item(), c_loss[bi].item(),
+                           last_lr, text[bi]))
 
             if "abductive" in args.mode or "lexical" in args.mode:
                 pass
@@ -297,15 +360,15 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
             print()
 
         if args.wandb:
-            wandb.log(
-                {"Loss": loss.item(),
-                 "left-to-right nll loss": lr_nll_loss.item(),
-                 "right-to-left nll loss": rl_nll_loss.item(),
-                 "constraint loss": c_loss,
-                 "Gassian_Noise_STD": noise_std,
-                 "LR": last_lr,
-                 "Gradient": torch.norm(epsilon.grad).detach().clone().data.cpu().numpy()}
-            )
+            wandb.log({
+                "Loss": loss.item(),
+                "left-to-right nll loss": lr_nll_loss.item(),
+                "right-to-left nll loss": rl_nll_loss.item(),
+                "constraint loss": c_loss,
+                "Gassian_Noise_STD": noise_std,
+                "LR": last_lr,
+                "Gradient": torch.norm(epsilon.grad).detach().clone().data.cpu().numpy()
+            })
 
         ## noise
         if iter < args.num_iters - 1:
@@ -327,8 +390,11 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
                 else:
                     noise_std = large_gs_stds[ni]
 
-                noise = torch.normal(mean=args.gs_mean, std=noise_std, size=epsilon.size(),
-                                     device=device, requires_grad=False)
+                noise = torch.normal(mean=args.gs_mean,
+                                     std=noise_std,
+                                     size=epsilon.size(),
+                                     device=device,
+                                     requires_grad=False)
                 if args.win_anneal_iters >= 0 and iter >= args.win_anneal_iters:
                     zeros = torch.zeros_like(noise)
                     noise_mix = torch.cat([zeros[:, :frozen_len], noise[:, frozen_len:]], dim=1)
@@ -339,8 +405,13 @@ def decode(model, tokenizer, device, x="", z="", constraints=None, args=None, mo
     if args.wandb:
         wandb.finish()
 
-    text, _, last_text_ids = decode_with_model_topk(
-        model, y_logits_, args.topk, soft_forward_x, x_model_past, tokenizer, extra_mask=z_mask)
+    text, _, last_text_ids = decode_with_model_topk(model,
+                                                    y_logits_,
+                                                    args.topk,
+                                                    soft_forward_x,
+                                                    x_model_past,
+                                                    tokenizer,
+                                                    extra_mask=z_mask)
 
     last_rank_loss = model(input_ids=last_text_ids, labels=last_text_ids).loss
     last_rank_loss = last_rank_loss.detach().clone().data.cpu().numpy()
@@ -420,7 +491,8 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
             z_text_so_far = z_sent.strip()
             z_text_so_far = ". " + z_text_so_far
 
-            assert len(x_text_so_far) == len(x_addon), "%d vs %d" % (len(x_text_so_far), len(x_addon))
+            assert len(x_text_so_far) == len(x_addon), "%d vs %d" % (len(x_text_so_far),
+                                                                     len(x_addon))
 
             new_x_text_so_far = []
             new_x_addon = []
@@ -431,15 +503,21 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
 
                     text_ij = text_ij.strip()
 
-                    ppl_last, text, text_post = decode(
-                        model, tokenizer, device, text_ij, z_text_so_far, None, args, model_back=model_back)
+                    ppl_last, text, text_post = decode(model,
+                                                       tokenizer,
+                                                       device,
+                                                       text_ij,
+                                                       z_text_so_far,
+                                                       None,
+                                                       args,
+                                                       model_back=model_back)
 
                     outputs.append([text_ij, text_post])
 
                     #  Rank and filter text_post from util.py:
                     text_post = [post_sent(x) for x in text_post]
-                    text_post = rank_and_filter(text_post, text_ij, z_text_so_far, model, tokenizer, device,
-                                                args.no_loss_rerank)
+                    text_post = rank_and_filter(text_post, text_ij, z_text_so_far, model, tokenizer,
+                                                device, args.no_loss_rerank)
 
                     if ii == len(x_text_so_far) - 1 and oi == len(ori_endings) - 1:
                         last_output = text_post
@@ -518,8 +596,14 @@ def grammar_correction(model, tokenizer, device, args, model_back=None):
 
         y = ". " + y
 
-        ppl_last, text, text_post = decode(
-            model, tokenizer, device, x, y, None, args, model_back=model_back)
+        ppl_last, text, text_post = decode(model,
+                                           tokenizer,
+                                           device,
+                                           x,
+                                           y,
+                                           None,
+                                           args,
+                                           model_back=model_back)
         out = {
             'original': x + " " + y,
             'generation': text,
@@ -587,11 +671,17 @@ def abductive_reasoning(model, tokenizer, device, args, model_back=None):
         text_candidates = []
         text_complete_candidates = []
         for _ in range(args.repeat_batch):
-            ppl_last, text, text_post = decode(model, tokenizer, device, x, z, None, args,
-                                               model_back=model_back, zz=z_keywords)
+            ppl_last, text, text_post = decode(model,
+                                               tokenizer,
+                                               device,
+                                               x,
+                                               z,
+                                               None,
+                                               args,
+                                               model_back=model_back,
+                                               zz=z_keywords)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
-
 
         out = {
             'x': x,
@@ -660,7 +750,14 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
         text_candidates = []
         text_complete_candidates = []
         for _ in range(args.repeat_batch):
-            ppl_last, text, text_post = decode(model, tokenizer, device, x, z, None, args, model_back=model_back,
+            ppl_last, text, text_post = decode(model,
+                                               tokenizer,
+                                               device,
+                                               x,
+                                               z,
+                                               None,
+                                               args,
+                                               model_back=model_back,
                                                zz=z_keywords)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
@@ -690,9 +787,12 @@ def main():
         torch.manual_seed(args.seed)
         np.random.seed(args.seed)
     # Load pretrained model
-    model = GPT2LMHeadModel.from_pretrained(
-        args.pretrained_model, output_hidden_states=True,
-        resid_pdrop=0, embd_pdrop=0, attn_pdrop=0, summary_first_dropout=0)
+    model = GPT2LMHeadModel.from_pretrained(args.pretrained_model,
+                                            output_hidden_states=True,
+                                            resid_pdrop=0,
+                                            embd_pdrop=0,
+                                            attn_pdrop=0,
+                                            summary_first_dropout=0)
     model.to(device)
     model.eval()
     # Freeze GPT-2 weights
@@ -704,8 +804,10 @@ def main():
     if args.use_back_model:
         sys.path.insert(0, './GPT2ForwardBackward')
         from modeling_opengpt2 import OpenGPT2LMHeadModel
-        model_back = OpenGPT2LMHeadModel.from_pretrained(
-            args.back_model, hidden_dropout_prob=0, attention_probs_dropout_prob=0, summary_first_dropout=0)
+        model_back = OpenGPT2LMHeadModel.from_pretrained(args.back_model,
+                                                         hidden_dropout_prob=0,
+                                                         attention_probs_dropout_prob=0,
+                                                         summary_first_dropout=0)
         model_back.to(device)
         model_back.eval()
         # Freeze GPT-2 weights
@@ -713,7 +815,6 @@ def main():
             param.requires_grad = False
     else:
         model_back = None
-
 
     if "counterfactual" in args.mode:
         counterfactual_reasoning(model, tokenizer, device, args, model_back=model_back)
