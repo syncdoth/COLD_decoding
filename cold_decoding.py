@@ -21,8 +21,8 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-from bleuloss import batch_log_bleulosscnn_ae
-from constraints import fluency_constraint, right_context_pred_constraint
+from constraints import (fluency_constraint, keyword_lexical_constraint,
+                         right_context_pred_constraint, sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
                   initialize, one_hot, post_process, post_sent, rank_and_filter, top_k_filter_3d)
 
@@ -147,14 +147,17 @@ def decode(model,
            tokenizer,
            device,
            prompt=None,
-           main_constraint=None,
+           sent_constraint=None,
+           keyword_constraint=None,
+           constraint_functions=(None,),
            args=None,
-           model_back=None,
-           lexical_constraint=None):
+           model_back=None):
     """
     prompt: left context   (prompt in lexical task)
-    main_constraint: optimization target  (original ending in counterfactual task)
-    lexical_constraints: (constraint set in lexical constrained task)
+    sent_constraint: optimization target  (original ending in counterfactual task)
+    keyword_constraint: (constraint set in lexical constrained task)
+    constraint_functions: list of function names to use as constraint.
+        currently supports ('sentence_ngram', 'right_context_pred', 'keyword')
     """
     model.eval()
 
@@ -166,19 +169,19 @@ def decode(model,
     z_mask = None
     length = args.length
 
-    assert main_constraint is not None  # TODO: make this possible
+    assert sent_constraint is not None  # TODO: make this possible
     # delete the "." token we appended before
-    z_encoded = torch.tensor(tokenizer.encode(main_constraint)[1:], dtype=torch.long)
-    z_encoded = z_encoded.unsqueeze(0).repeat(args.batch_size, 1)
-    z_onehot = one_hot(z_encoded, dimension=tokenizer.vocab_size)
+    z_encoded = torch.tensor(tokenizer.encode(sent_constraint)[1:], dtype=torch.long)
+    z_encoded = z_encoded.unsqueeze(0).repeat(args.batch_size, 1)  # [B, T]
+    z_onehot = one_hot(z_encoded, dimension=tokenizer.vocab_size)  # [B, T, V]
 
     if length <= 0:
         length = z_encoded.shape[1] - length
 
     # obtain z_mask
-    if lexical_constraint is None:
+    if keyword_constraint is None:
         # NOTE: if no lexical (~keyword based) constraints, obtain keyword from main constraint
-        z_words = word_tokenize(main_constraint[2:])  # delete the ". " token we appended before
+        z_words = word_tokenize(sent_constraint[2:])  # delete the ". " token we appended before
         z_nonstop_words = [
             w.lower() for w in z_words if w.lower() not in stop_words and w.isalnum()
         ]
@@ -193,21 +196,20 @@ def decode(model,
         # [B, T, V]
         z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
     else:
-        zz_encoded = torch.tensor(tokenizer.encode(lexical_constraint)[1:],
-                                  dtype=torch.long)  # delete the "." token we appended before
+        keywords_encoded = torch.tensor(tokenizer.encode(keyword_constraint), dtype=torch.long)
         z_mask = np.zeros([tokenizer.vocab_size])
-        z_mask[zz_encoded] = 1.
+        z_mask[keywords_encoded] = 1.
         z_mask = torch.tensor(z_mask)
 
         # [B, T, V]
         z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
         # [B, K]
-        zz_encoded = zz_encoded.unsqueeze(0).repeat(args.batch_size, 1)
+        keywords_encoded = keywords_encoded.unsqueeze(0).repeat(args.batch_size, 1)
 
     if args.verbose:
         print(f"prompt:\t|{prompt}|\n"
-              f"main constraint:\t|{main_constraint}|\n"
-              f"lexical constraint:\t|{lexical_constraint}|\n"
+              f"main constraint:\t|{sent_constraint}|\n"
+              f"keyword constraint:\t|{keyword_constraint}|\n"
               f"length:\t{length}")
 
     # init logits distribution
@@ -270,12 +272,12 @@ def decode(model,
 
     for iter in range(args.num_iters):
         optim.zero_grad()
-        y_logits_ = y_logits + epsilon
+        y_logits_t = y_logits + epsilon
 
         mask_t, fluency_loss = fluency_constraint(
             model,
             args,
-            y_logits_,
+            y_logits_t,
             soft_forward_x,
             x_model_past,
             mask_t=mask_t,
@@ -285,25 +287,31 @@ def decode(model,
         )
 
         # n-gram similarity constraint
-        if "counterfactual" in args.mode:
-            c_loss = batch_log_bleulosscnn_ae(
-                decoder_outputs=top_k_filter_3d(y_logits_,
+        constraint_loss = {}
+        if "sentence_ngram" in constraint_functions:
+            filtered_y_logits = top_k_filter_3d(y_logits_t,
                                                 args.topk,
                                                 mask=mask_t,
-                                                extra_mask=z_mask).transpose(0, 1),
-                target_idx=z_encoded,
-                ngram_list=list(range(2, args.counterfactual_max_ngram + 1)))
+                                                extra_mask=z_mask)
+            sent_ngram_loss = sentence_ngram_similarity_constraint(
+                filtered_y_logits, z_encoded, max_ngram=args.counterfactual_max_ngram)
+            # TODO: --sentence_ngram_weight
+            constraint_loss["sentence_ngram"] = sent_ngram_loss * args.sentence_ngram_weight
 
-        if "abductive" in args.mode or "lexical" in args.mode:
+        if "right_context_pred" in constraint_functions:
             # right-context prediction constraint
-            c_loss_1 = right_context_pred_constraint(model, args, z_encoded, z_onehot, y_logits_,
-                                                     soft_forward_x)
+            r_pred_loss = right_context_pred_constraint(model, args, z_encoded, z_onehot,
+                                                        y_logits_t, soft_forward_x)
+            # TODO: --right_context_pred_weight
+            constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
+        if "keyword" in constraint_functions:
             # right-context n-gram similarity constraint
-            c_loss_2 = batch_log_bleulosscnn_ae(decoder_outputs=y_logits_.transpose(0, 1),
-                                                target_idx=zz_encoded,
-                                                ngram_list=[1])
-            c_loss = c_loss_1 + args.abductive_c2_weight * c_loss_2
+            kw_loss = keyword_lexical_constraint(y_logits, keywords_encoded)
+            # TODO: --keyword_weight
+            constraint_loss["keyword"] = kw_loss * args.keyword_weight
+
+        c_loss = sum(constraint_loss.values())
 
         loss = (1.0 - args.constraint_weight) * fluency_loss + args.constraint_weight * c_loss
         loss = loss.mean()
@@ -317,7 +325,7 @@ def decode(model,
         if args.verbose and ((iter + 1) % args.print_every == 0 or iter == 0 or
                              iter + 1 == args.num_iters):
             text, _, _ = decode_with_model_topk(model,
-                                                y_logits_,
+                                                y_logits_t,
                                                 args.topk,
                                                 soft_forward_x,
                                                 x_model_past,
@@ -376,7 +384,7 @@ def decode(model,
         wandb.finish()
 
     text, _, last_text_ids = decode_with_model_topk(model,
-                                                    y_logits_,
+                                                    y_logits_t,
                                                     args.topk,
                                                     soft_forward_x,
                                                     x_model_past,
@@ -473,10 +481,10 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
                     ppl_last, text, text_post = decode(model,
                                                        tokenizer,
                                                        device,
-                                                       text_ij,
-                                                       z_text_so_far,
-                                                       None,
-                                                       args,
+                                                       prompt=text_ij,
+                                                       sent_constraint=z_text_so_far,
+                                                       constraint_functions=('sentence_ngram',),
+                                                       args=args,
                                                        model_back=model_back)
 
                     outputs.append([text_ij, text_post])
@@ -566,7 +574,6 @@ def abductive_reasoning(model, tokenizer, device, args, model_back=None):
         print('Output to: \t', outfile)
 
         z = ". " + z
-        z_keywords = ". " + z_keywords
 
         text_candidates = []
         text_complete_candidates = []
@@ -574,12 +581,13 @@ def abductive_reasoning(model, tokenizer, device, args, model_back=None):
             ppl_last, text, text_post = decode(model,
                                                tokenizer,
                                                device,
-                                               x,
-                                               z,
-                                               None,
-                                               args,
-                                               model_back=model_back,
-                                               zz=z_keywords)
+                                               prompt=x,
+                                               sent_constraint=z,
+                                               keyword_constraint=z_keywords,
+                                               constraint_functions=('right_context_pred',
+                                                                     'keyword'),
+                                               args=args,
+                                               model_back=model_back)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
 
@@ -636,14 +644,9 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
         constraints = ' '.join(d["concept_set"].split("#"))
 
         x = "<|endoftext|>"
-        z = constraints
-        z_keywords = constraints
 
         print("%d / %d" % (i, len(data)))
         print('Output to: \t', outfile)
-
-        z = ". " + z
-        z_keywords = ". " + z_keywords
 
         text_candidates = []
         text_complete_candidates = []
@@ -651,11 +654,13 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
             ppl_last, text, text_post = decode(model,
                                                tokenizer,
                                                device,
-                                               x,
-                                               z,
-                                               args,
-                                               model_back=model_back,
-                                               lexical_constraint=z_keywords)
+                                               prompt=x,
+                                               sent_constraint=". " + constraints,
+                                               keyword_constraint=constraints,
+                                               constraint_functions=('right_context_pred',
+                                                                     'keyword'),
+                                               args=args,
+                                               model_back=model_back)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
 

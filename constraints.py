@@ -1,5 +1,6 @@
 import torch
 
+from bleuloss import batch_log_bleulosscnn_ae
 from util import soft_backward, soft_forward, soft_forward_xyz, soft_nll, top_k_filter_3d
 
 
@@ -83,3 +84,26 @@ def fluency_constraint(model,
 
         fluency_loss = lr_nll_loss + args.lr_nll_portion * rl_nll_loss
     return mask_t, fluency_loss
+
+
+def keyword_lexical_constraint(y_logits_t, keywords_id):
+    """
+    y_logits_t: current y_hat logits during Langevin Dynamics.  [B, T, V]
+    keywords_id: id of keywords.  [B, K]
+
+    """
+    return batch_log_bleulosscnn_ae(decoder_outputs=y_logits_t.transpose(0, 1),
+                                    target_idx=keywords_id,
+                                    ngram_list=[1])
+
+
+def sentence_ngram_similarity_constraint(y_logits_t, target_sent_id, max_ngram=4):
+    """
+    y_logits_t: current y_hat logits during Langevin Dynamics.  [B, T, V]
+    target_sent_id: id of target sentence.  [B, T]
+    max_ngram: max number of ngram size.
+    """
+    ngram_sim = batch_log_bleulosscnn_ae(decoder_outputs=y_logits_t.transpose(0, 1),
+                                         target_idx=target_sent_id,
+                                         ngram_list=list(range(2, max_ngram + 1)))
+    return ngram_sim
