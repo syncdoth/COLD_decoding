@@ -22,9 +22,9 @@ def freeze_module(module):
 
 
 def embed_inputs(embedding, logits, x_onehot=None, z_onehot=None, device='cuda'):
-    '''
+    """
     embeds inputs in a dense representation, before passing them to the model
-    '''
+    """
     # typically we embed a one-hot vector. But here since we work we work with dense representations,
     # we have softmax here to make sure that all the values of the input logits sum to one (similar to a 1-hot vector).
     probs = F.softmax(logits, dim=-1)
@@ -261,13 +261,13 @@ def additional_nll(logits, cur_text_ids):
 
 
 def soft_forward(model, x_onehot, y_logits, x_past=None, detach=True):
-    '''
+    """
     computes logits for $y$, based on a fixed context $y$ and the current logit distribution of $y$
     :param model:
     :param x_onehot:
     :param y_logits:
     :return:
-    '''
+    """
     xy_embeds = embed_inputs(model.get_input_embeddings().weight,
                              y_logits,
                              x_onehot=x_onehot,
@@ -282,13 +282,13 @@ def soft_forward(model, x_onehot, y_logits, x_past=None, detach=True):
 
 
 def soft_forward_xyz(model, x_onehot, y_logits, z_onehot):
-    '''
+    """
     computes logits for $y$, based on a fixed context $y$ and the current logit distribution of $y$
     :param model:
     :param x_onehot:
     :param y_logits:
     :return:
-    '''
+    """
     xyz_embeds = embed_inputs(model.get_input_embeddings().weight,
                               y_logits,
                               x_onehot=x_onehot,
@@ -498,10 +498,10 @@ def constraint_loss_all(logits, cs_onehot, cs_ids):
 
 
 def _constraint_loss2(logits, cs_onehot):
-    '''
+    """
     a re-implementation of `_constraint_loss` with a slightly different logic.
     TODO: keep only one of these functions
-    '''
+    """
     logits = logits.squeeze(0)  # drop the empty dimension
     cs_onehot = cs_onehot.float().squeeze(
         0
@@ -640,11 +640,11 @@ def compute_loss(model,
                  args=None,
                  model_back=None,
                  zz=None):
-    '''
+    """
     x: left context   (prompt in lexical constrained task)
     z: optimization target  (original ending in counterfactual task)
     constraints: (constraint set in lexical constrained task)
-    '''
+    """
     batch_size = 2
 
     x_ = tokenizer.encode(x)

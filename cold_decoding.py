@@ -12,8 +12,6 @@ import numpy as np
 import torch
 import wandb
 
-from constraints import fluency_constraint, right_context_pred_constraint
-
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('averaged_perceptron_tagger')
@@ -24,6 +22,7 @@ from nltk.tokenize import word_tokenize
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 from bleuloss import batch_log_bleulosscnn_ae
+from constraints import fluency_constraint, right_context_pred_constraint
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
                   initialize, one_hot, post_process, post_sent, rank_and_filter, top_k_filter_3d)
 
@@ -147,86 +146,73 @@ def options():
 def decode(model,
            tokenizer,
            device,
-           x="",
-           z="",
-           constraints=None,
+           prompt=None,
+           main_constraint=None,
            args=None,
            model_back=None,
-           zz=None):
-    '''
-    x: left context   (prompt in lexical lexical task)
-    z: optimization target  (original ending in counterfactual task)
-    constraints: (constraint set in lexical constrained task)
-    '''
+           lexical_constraint=None):
+    """
+    prompt: left context   (prompt in lexical task)
+    main_constraint: optimization target  (original ending in counterfactual task)
+    lexical_constraints: (constraint set in lexical constrained task)
+    """
+    model.eval()
 
-    x_ = tokenizer.encode(x)
-    x_t = torch.tensor(x_, device=device, dtype=torch.long)
-    x_onehot = one_hot(x_t, dimension=tokenizer.vocab_size)
-
-    # repeat batch_size times
-    x_t = x_t.unsqueeze(0).repeat(args.batch_size, 1)
-    x_onehot = x_onehot.repeat(args.batch_size, 1, 1)
+    assert prompt is not None  # TODO: make this possible
+    x_encoded = torch.tensor(tokenizer.encode(prompt), dtype=torch.long)
+    x_encoded = x_encoded.unsqueeze(0).repeat(args.batch_size, 1)  # [B, T]
+    x_onehot = one_hot(x_encoded, dimension=tokenizer.vocab_size)  # [B, T, V]
 
     z_mask = None
+    length = args.length
 
-    if 'counterfactual' in args.mode:
-        z_ = tokenizer.encode(z)[1:]  # delete the "." token we appended before
-        z_t = torch.tensor(z_, device=device, dtype=torch.long)
-        z_t = z_t.unsqueeze(0).repeat(args.batch_size, 1)
+    assert main_constraint is not None  # TODO: make this possible
+    # delete the "." token we appended before
+    z_encoded = torch.tensor(tokenizer.encode(main_constraint)[1:], dtype=torch.long)
+    z_encoded = z_encoded.unsqueeze(0).repeat(args.batch_size, 1)
+    z_onehot = one_hot(z_encoded, dimension=tokenizer.vocab_size)
 
-        z_onehot = one_hot(z_t, dimension=tokenizer.vocab_size)
-        z_onehot = z_onehot.repeat(args.batch_size, 1, 1)
+    if length <= 0:
+        length = z_encoded.shape[1] - length
 
-        length = args.length
-        if length <= 0:
-            length = z_t.shape[1] - length
-        if args.verbose:
-            print("x:\t|%s|\nz:\t|%s|\nlength:\t%d\nconstraints:\t%s" %
-                  (tokenizer.decode(x_), tokenizer.decode(z_), length, constraints))
-
-        # z_mask: [batch_size, vocab_size]
-        z_words = word_tokenize(z[2:])  # delete the ". " token we appended before
+    # obtain z_mask
+    if lexical_constraint is None:
+        # NOTE: if no lexical (~keyword based) constraints, obtain keyword from main constraint
+        z_words = word_tokenize(main_constraint[2:])  # delete the ". " token we appended before
         z_nonstop_words = [
             w.lower() for w in z_words if w.lower() not in stop_words and w.isalnum()
         ]
         z_nonstop_words += [z_words[0]]  # add the first token
         z_nonstop_words = ' ' + ' '.join(z_nonstop_words)
-        z_nonstop_ = tokenizer.encode(z_nonstop_words)
+        z_nonstop = tokenizer.encode(z_nonstop_words)
         print('|' + z_nonstop_words + '|')
 
         z_mask = np.zeros([tokenizer.vocab_size])
-        z_mask[z_nonstop_] = 1.
-        z_mask = torch.tensor(z_mask, device=device)
+        z_mask[z_nonstop] = 1.
+        z_mask = torch.tensor(z_mask)
+        # [B, T, V]
         z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
-
-    if 'abductive' in args.mode or 'lexical' in args.mode:
-        length = args.length
-
-        z_ = tokenizer.encode(z)[1:]  # delete the "." token we appended before
-        z_t = torch.tensor(z_, device=device, dtype=torch.long)
-        z_t = z_t.unsqueeze(0).repeat(args.batch_size, 1)
-
-        z_onehot = one_hot(z_t, dimension=tokenizer.vocab_size)
-        z_onehot = z_onehot.repeat(args.batch_size, 1, 1)
-
-        zz_ = tokenizer.encode(zz)[1:]  # delete the "." token we appended before
-        zz_t = torch.tensor(zz_, device=device, dtype=torch.long)
-        zz_t = zz_t.unsqueeze(0).repeat(args.batch_size, 1)
-
+    else:
+        zz_encoded = torch.tensor(tokenizer.encode(lexical_constraint)[1:],
+                                  dtype=torch.long)  # delete the "." token we appended before
         z_mask = np.zeros([tokenizer.vocab_size])
-        z_mask[zz_] = 1.
-        z_mask = torch.tensor(z_mask, device=device)
+        z_mask[zz_encoded] = 1.
+        z_mask = torch.tensor(z_mask)
+
+        # [B, T, V]
         z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
+        # [B, K]
+        zz_encoded = zz_encoded.unsqueeze(0).repeat(args.batch_size, 1)
 
-        if args.verbose:
-            print("x:\t|%s|\nz:\t|%s|\nzz:\t|%s|\nconstraints:\t%s" %
-                  (tokenizer.decode(x_), tokenizer.decode(z_), tokenizer.decode(zz_), constraints))
-
-    model.eval()
+    if args.verbose:
+        print(f"prompt:\t|{prompt}|\n"
+              f"main constraint:\t|{main_constraint}|\n"
+              f"lexical constraint:\t|{lexical_constraint}|\n"
+              f"length:\t{length}")
 
     # init logits distribution
     if args.init_mode == 'random':
-        init_logits = initialize(model, x_t, length, args.init_temp, device)
+        init_logits = initialize(model, x_encoded, length, args.init_temp, device)
     else:
         init_logits = z_onehot / 0.1
         init_logits = init_logits[:, :length, :]
@@ -238,11 +224,11 @@ def decode(model,
             ],
                                     dim=1)
     text, _, _ = get_text_from_logits(init_logits, tokenizer)
-    for bi in range(args.batch_size):
-        print("[initial]: %s" % (text[bi]))
+    for text_i in range(text):
+        print(f"[initial]: {text_i}")
 
     if args.wandb:
-        wandb.init(project='args.mode' + str(int(round(time.time() * 1000))), config=args)
+        wandb.init(project=f'{args.mode}-{round(time.time() * 1000)}', config=args)
 
     assert args.prefix_length <= 0  # Otherwise not compatible with batch mode
 
@@ -266,21 +252,19 @@ def decode(model,
 
     frozen_len = args.frozen_length
 
-    y_logits_ = None
     noise_std = 0.0
 
     ## Encode x beforehand
     assert args.prefix_length <= 0, "The current code does not support prefix-length > 0"
-    soft_forward_x = x_onehot[:, -1:, :]  # The last token of x is used in soft_forward
-    if x_t.shape[1] == 1:
+    # The last token of x is used in soft_forward; [B, 1, V]
+    soft_forward_x = x_onehot[:, -1:, :]
+    if x_encoded.shape[1] == 1:
         x_model_past = None
     else:
-        x_model_outputs = model(x_t[:, :-1])
+        x_model_outputs = model(x_encoded[:, :-1])
         x_model_past = x_model_outputs.past_key_values
+        # TODO: this may be erroneous
         x_model_past = [_.detach() for _ in x_model_past]
-
-    # For right to left model
-    rl_reverse_index = torch.arange(y_logits.shape[1] - 1, -1, -1)
 
     mask_t = None
 
@@ -288,17 +272,16 @@ def decode(model,
         optim.zero_grad()
         y_logits_ = y_logits + epsilon
 
-        mask_t, lr_nll_loss, rl_nll_loss = fluency_constraint(
+        mask_t, fluency_loss = fluency_constraint(
             model,
             args,
-            z_mask,
-            z_onehot,
             y_logits_,
             soft_forward_x,
             x_model_past,
-            rl_reverse_index,
             mask_t=mask_t,
             model_back=model_back,
+            z_mask=z_mask,
+            z_onehot=z_onehot,
         )
 
         # n-gram similarity constraint
@@ -308,23 +291,21 @@ def decode(model,
                                                 args.topk,
                                                 mask=mask_t,
                                                 extra_mask=z_mask).transpose(0, 1),
-                target_idx=z_t,
+                target_idx=z_encoded,
                 ngram_list=list(range(2, args.counterfactual_max_ngram + 1)))
 
         if "abductive" in args.mode or "lexical" in args.mode:
             # right-context prediction constraint
-            c_loss_1 = right_context_pred_constraint(model, args, z_t, z_onehot, y_logits_,
+            c_loss_1 = right_context_pred_constraint(model, args, z_encoded, z_onehot, y_logits_,
                                                      soft_forward_x)
 
             # right-context n-gram similarity constraint
             c_loss_2 = batch_log_bleulosscnn_ae(decoder_outputs=y_logits_.transpose(0, 1),
-                                                target_idx=zz_t,
+                                                target_idx=zz_encoded,
                                                 ngram_list=[1])
             c_loss = c_loss_1 + args.abductive_c2_weight * c_loss_2
 
-        loss = (1.0 - args.constraint_weight) * args.lr_nll_portion * lr_nll_loss \
-               + (1.0 - args.constraint_weight) * (1 - args.lr_nll_portion) * rl_nll_loss \
-               + args.constraint_weight * c_loss
+        loss = (1.0 - args.constraint_weight) * fluency_loss + args.constraint_weight * c_loss
         loss = loss.mean()
 
         if iter < args.num_iters - 1:  # so that the mask_t at the last iteration will not change
@@ -343,21 +324,10 @@ def decode(model,
                                                 tokenizer,
                                                 extra_mask=z_mask)
             for bi in range(args.batch_size):
-                if "abductive" in args.mode or "lexical" in args.mode:
-                    print(
-                        "%d, loss: %.4f, lr_nll_loss: %.4f, rl_nll_loss: %.4f,  c_loss_2: %.4f, lr: %.4f, |%s|"
-                        % (iter + 1, loss.item(), lr_nll_loss[bi].item(), rl_nll_loss[bi].item(),
-                           c_loss_2[bi].item(), last_lr, text[bi]))
-                    # print("%d, loss: %.4f, lr_nll_loss: %.4f, rl_nll_loss: %.4f, c_loss_1: %.4f, c_loss_2: %.4f, lr: %.4f, |%s|" % (iter + 1, loss.item(), lr_nll_loss[bi].item(), rl_nll_loss[bi].item(), c_loss_1[bi].item(), c_loss_2[bi].item(), last_lr, text[bi]))
-                else:
-                    print("%d, loss: %.4f, lr_nll_loss: %.4f, c_loss: %.4f, lr: %.4f, |%s|" %
-                          (iter + 1, loss.item(), lr_nll_loss[bi].item(), c_loss[bi].item(),
-                           last_lr, text[bi]))
-
-            if "abductive" in args.mode or "lexical" in args.mode:
-                pass
-
-            print()
+                print(f"{iter + 1}, loss: {loss.item():.4f}, "
+                      f"fluency_loss: {fluency_loss[bi].item():.4f}, "
+                      f"c_loss: {c_loss[bi].item():.4f}, "
+                      f"lr: {last_lr:.4f}, |{text[bi]}|")
 
         if args.wandb:
             wandb.log({
@@ -419,16 +389,16 @@ def decode(model,
     ppl_last = np.exp(last_rank_loss)
 
     if args.verbose:
-        for bi in range(args.batch_size):
-            print("[final]: %s\n%.4f" % (text[bi], ppl_last))
-            print("[final complete sentence]: %s\n" % text_post[bi])
+        for txt, post in zip(text, text_post):
+            print(f"[final]: {txt}\n{ppl_last:.4f}")
+            print(f"[final complete sentence]: {post}\n")
 
     return ppl_last, text, text_post
 
 
 def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
-    fr = open(args.input_file, 'r')
-    data = [json.loads(x) for x in fr.readlines()]
+    with open(args.input_file, 'r') as fr:
+        data = [json.loads(x) for x in fr.readlines()]
     loss_rerank = 'norerank' if args.no_loss_rerank else 'rerank'
     file_name = '%s_%s_seed%d_%d_%d_%s_ngram%d_cw%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
                 '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_%s_%s_output.json' % (
@@ -453,7 +423,7 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
                     args.large_gs_std)
 
     outfile = os.path.join(args.output_dir, file_name)
-    fw = open(outfile, 'w')
+
     fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + file_name), 'w')
     fw_res = open(os.path.join(args.output_dir, 'res_' + file_name), 'w')
 
@@ -466,7 +436,7 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
             torch.manual_seed(args.seed)
             np.random.seed(args.seed)
 
-        print("%d / %d" % (i, len(data)))
+        print(f"{i} / {len(data)}")
         print('Output to: \t', outfile)
         print('output-lgt-temp:\t', args.output_lgt_temp)
 
@@ -477,22 +447,19 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
         ori_ending = d.get('original_ending', "")
         ori_endings = tokenize.sent_tokenize(ori_ending)
 
-        if x in procssed:
-            continue
-        else:
+        if x not in procssed:
             procssed.add(x)
 
         x_text_so_far = [""]
         x_addon = [[x]]
 
         outputs = []
-        for oi, z_sent in enumerate(ori_endings):
-            print("Sentence %d" % oi)
+        for oi, z_sent in enumerate(ori_endings):  # per sentence in original ending
+            print(f"Sentence {oi}")
             z_text_so_far = z_sent.strip()
             z_text_so_far = ". " + z_text_so_far
 
-            assert len(x_text_so_far) == len(x_addon), "%d vs %d" % (len(x_text_so_far),
-                                                                     len(x_addon))
+            assert len(x_text_so_far) == len(x_addon), f"{len(x_text_so_far)} vs {len(x_addon)}"
 
             new_x_text_so_far = []
             new_x_addon = []
@@ -531,7 +498,7 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
             x_text_so_far = new_x_text_so_far
             x_addon = new_x_addon
 
-            break
+            # break
 
         complete_output = outputs
         out = {
@@ -542,77 +509,10 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
             'generation_complete': complete_output,
         }
 
-        fw.write(json.dumps(out) + '\n')
-        fw.flush()
         fw_pretty.write(json.dumps(out, indent=4) + '\n')
         fw_pretty.flush()
 
-    print("outputs: %s" % outfile)
-
-
-def grammar_correction(model, tokenizer, device, args, model_back=None):
-    fr = open(args.input_file, 'r')
-    data = [x.strip() for x in fr.readlines()]
-    file_name = '%s_seed%d_%d_%d_%s_cw%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
-                '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_%s_%s_output.json' % (
-                    args.version,
-                    args.seed,
-                    args.start,
-                    args.end,
-                    args.mode,
-                    args.constraint_weight,
-                    args.lr_nll_portion,
-                    args.length,
-                    args.topk,
-                    args.num_iters,
-                    args.frozen_length,
-                    args.win_anneal_iters,
-                    args.noise_iters,
-                    args.gs_std,
-                    args.stepsize,
-                    args.large_noise_iters,
-                    args.large_gs_std)
-
-    outfile = os.path.join(args.output_dir, file_name)
-    fw = open(outfile, 'w')
-
-    # Grammar
-    data = [[' '.join(x.split()[:3]), ' '.join(x.split()[3:])] for x in data]
-    print('#data: ', len(data))
-
-    for i, d in enumerate(data):
-        if i < args.start or i > args.end:
-            continue
-        print("%d / %d" % (i, len(data)))
-        print('Output to: \t', outfile)
-
-        if len(d[1].split()) <= 4:
-            text = [d[1][2:]]
-            text_post = [d[1][2:]]
-            continue
-
-        x = d[0]
-        y = d[1]
-
-        y = ". " + y
-
-        ppl_last, text, text_post = decode(model,
-                                           tokenizer,
-                                           device,
-                                           x,
-                                           y,
-                                           None,
-                                           args,
-                                           model_back=model_back)
-        out = {
-            'original': x + " " + y,
-            'generation': text,
-            'generation_complete': text_post,
-        }
-
-        fw.write(json.dumps(out) + '\n')
-
-    print("outputs: %s" % outfile)
+    print(f"outputs: {outfile}")
 
 
 def abductive_reasoning(model, tokenizer, device, args, model_back=None):
@@ -727,16 +627,14 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
                   args.large_gs_std)
     print("outputs: %s" % outfile)
 
-    fw = open(os.path.join(args.output_dir, outfile), 'w')
     fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
 
     for i, d in enumerate(data):
         if i < args.start or i > args.end:
             continue
         print(d["concept_set"])
-        constraints = d["concept_set"].split("#")
+        constraints = ' '.join(d["concept_set"].split("#"))
 
-        constraints = ' '.join(constraints)
         x = "<|endoftext|>"
         z = constraints
         z_keywords = constraints
@@ -755,10 +653,9 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
                                                device,
                                                x,
                                                z,
-                                               None,
                                                args,
                                                model_back=model_back,
-                                               zz=z_keywords)
+                                               lexical_constraint=z_keywords)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
 
@@ -771,12 +668,77 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
         print(out)
         print('Output to: \t', outfile)
 
-        fw.write(json.dumps(out) + '\n')
-        fw.flush()
         fw_pretty.write(json.dumps(out, indent=4) + '\n')
         fw_pretty.flush()
 
     print("outputs: %s" % outfile)
+
+
+""" Deprecated; grammar_correction
+def grammar_correction(model, tokenizer, device, args, model_back=None):
+    fr = open(args.input_file, 'r')
+    data = [x.strip() for x in fr.readlines()]
+    file_name = '%s_seed%d_%d_%d_%s_cw%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
+                '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_%s_%s_output.json' % (
+                    args.version,
+                    args.seed,
+                    args.start,
+                    args.end,
+                    args.mode,
+                    args.constraint_weight,
+                    args.lr_nll_portion,
+                    args.length,
+                    args.topk,
+                    args.num_iters,
+                    args.frozen_length,
+                    args.win_anneal_iters,
+                    args.noise_iters,
+                    args.gs_std,
+                    args.stepsize,
+                    args.large_noise_iters,
+                    args.large_gs_std)
+
+    outfile = os.path.join(args.output_dir, file_name)
+    fw = open(outfile, 'w')
+
+    # Grammar
+    data = [[' '.join(x.split()[:3]), ' '.join(x.split()[3:])] for x in data]
+    print('#data: ', len(data))
+
+    for i, d in enumerate(data):
+        if i < args.start or i > args.end:
+            continue
+        print("%d / %d" % (i, len(data)))
+        print('Output to: \t', outfile)
+
+        if len(d[1].split()) <= 4:
+            text = [d[1][2:]]
+            text_post = [d[1][2:]]
+            continue
+
+        x = d[0]
+        y = d[1]
+
+        y = ". " + y
+
+        ppl_last, text, text_post = decode(model,
+                                           tokenizer,
+                                           device,
+                                           x,
+                                           y,
+                                           None,
+                                           args,
+                                           model_back=model_back)
+        out = {
+            'original': x + " " + y,
+            'generation': text,
+            'generation_complete': text_post,
+        }
+
+        fw.write(json.dumps(out) + '\n')
+
+    print("outputs: %s" % outfile)
+"""
 
 
 def main():
@@ -822,8 +784,10 @@ def main():
         abductive_reasoning(model, tokenizer, device, args, model_back=model_back)
     if "lexical" in args.mode:
         lexical_generation(model, tokenizer, device, args, model_back=model_back)
-    if "grammar" in args.mode:
-        grammar_correction(model, tokenizer, device, args, model_back=model_back)
+
+    # deprecated
+    # if "grammar" in args.mode:
+    #     grammar_correction(model, tokenizer, device, args, model_back=model_back)
 
 
 if __name__ == "__main__":
