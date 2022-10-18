@@ -32,5 +32,5 @@ python3 cold_decoding.py \
     --repeat-batch 8 \
     --print-every 200 \
     --input-file "./data/commongen/commongen.dev.jsonl" \
-	--output-dir "./data/commongen/"
+	--output-dir "./outputs/commongen/"
 

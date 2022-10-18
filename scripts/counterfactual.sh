@@ -29,7 +29,7 @@ python3 cold_decoding.py \
 	--large-noise-iters 50,200,500 \
 	--large_gs_std 0.5,0.1,0.05  \
 	--input-file "./data/counterfactual/dev_data.json" \
-	--output-dir "./data/counterfactual/" \
+	--output-dir "./outputs/counterfactual/" \
 	--stepsize-ratio 1  \
     --batch-size 8 \
     --print-every 200
