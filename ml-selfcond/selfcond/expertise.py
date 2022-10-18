@@ -11,10 +11,8 @@ from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import pandas as pd
+import torch
 from sklearn.metrics import average_precision_score
-
-from tqdm import tqdm
-
 
 # def load_expertise_csv(
 #     concept: str,
@@ -92,6 +90,44 @@ from tqdm import tqdm
 #     for d in data:
 #         out[d["group"]][d["concept"]] = d
 #     return out
+
+def get_expert_reference(
+    expertise: pd.DataFrame,
+    value: str,
+    metric: str,
+    num_units: int = 1,
+    top_n: int = 1,
+    use_layers: t.Union[str, t.List[str]] = None):
+    assert value is not None
+
+    if use_layers is None:
+        use_layers = []
+    elif isinstance(use_layers, str):
+        use_layers = [
+            use_layers,
+        ]
+
+    if len(use_layers) > 0:
+        selected_rows = expertise["layer"].str.contains("|".join(use_layers))
+        df = expertise[selected_rows].copy()
+    else:
+        df = expertise.copy()
+
+    if top_n <= 0:
+        rs = np.random.RandomState(None)
+        df = df.sample(n=num_units, replace=False, random_state=rs)
+    else:
+        df = df.sort_values(by=metric, ascending=False).iloc[
+            range((top_n - 1) * num_units, top_n * num_units)
+        ]
+
+    expert_per_layer = {}
+    for layer_name, layer_df in df.groupby("layer", sort=True):
+        units_force = torch.tensor(layer_df["unit"].values, dtype=torch.int64)
+        vals_force = torch.tensor(layer_df[value].values, dtype=torch.float32)
+        expert_per_layer[layer_name] = {'units': units_force, 'values': vals_force}
+
+    return df, expert_per_layer
 
 
 def _single_response_ap(unit_response: t.Sequence[float], labels: t.Sequence[int]) -> float:

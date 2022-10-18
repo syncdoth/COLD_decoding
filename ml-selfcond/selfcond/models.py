@@ -218,7 +218,7 @@ class TorchModel:
         self._forward_hooks.clear()
 
     def run_inference(
-        self, inputs: t.Mapping[str, torch.Tensor], outputs: t.AbstractSet[str]
+        self, inputs: t.Mapping[str, torch.Tensor], outputs: t.AbstractSet[str], trainable: bool = False,
     ) -> t.Dict[str, np.ndarray]:
         """
          Run inference on a single batch of input data and return the responses the layers specified in ``outputs``.
@@ -234,10 +234,12 @@ class TorchModel:
              A map of response names to ``np.ndarray`` containing the requested model responses
              to the input data.
         """
-        a_key = list(inputs.keys())[0]
-        torch_inputs: t.MutableMapping[str, torch.Tensor] = {}
-        if isinstance(inputs[a_key][0], torch.Tensor):
-            torch_inputs = {k: v.to(device=self._device) for k, v in inputs.items()}
+        # a_key = list(inputs.keys())[0]
+        # torch_inputs: t.MutableMapping[str, torch.Tensor] = {}
+        # if isinstance(inputs[a_key][0], torch.Tensor):
+        #     torch_inputs = {k: v.to(device=self._device) for k, v in inputs.items()}
+        torch_inputs = inputs
+        # NOTE: assume that the input is formed well with device management
 
         response_dict: t.Dict[str, t.Any] = {}
 
@@ -249,9 +251,12 @@ class TorchModel:
             for output_idx, o in enumerate(module_output):
                 response_name = "{}:{}".format(module_name, output_idx)
                 if response_name in outputs:
-                    tensor = (
-                        o.detach().numpy() if self._device == "cpu" else o.detach().cpu().numpy()
-                    )
+                    if trainable:
+                        tensor = o
+                    else:
+                        tensor = (
+                            o.detach().numpy() if self._device == "cpu" else o.detach().cpu().numpy()
+                        )
                     response_dict[response_name] = tensor
 
         # register forward hook for all modules in the network with the exception of the root
@@ -269,8 +274,11 @@ class TorchModel:
             hooks.append(module.register_forward_hook(partial(hook, module_name)))
 
         # perform inference
-        with torch.no_grad():  # type: ignore
+        if trainable:
             self._pytorch_module(**torch_inputs)
+        else:
+            with torch.no_grad():  # type: ignore
+                self._pytorch_module(**torch_inputs)
 
         # remove forward hooks
         for h in hooks:
