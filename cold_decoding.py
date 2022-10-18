@@ -40,7 +40,6 @@ def options():
     parser.add_argument("--straight-through", action="store_true")  # TODO: meaning?
     parser.add_argument("--topk", type=int, default=0)
     parser.add_argument("--rl-topk", type=int, default=0)
-    parser.add_argument("--if-zx", action="store_true")
     ## experiment
     parser.add_argument("--input-file",
                         type=str,
@@ -543,10 +542,7 @@ def abductive_reasoning(model, tokenizer, data, args, model_back=None, device='c
         if i < args.start or i > args.end:
             continue
 
-        if args.if_zx:
-            x = d["obs2"].strip() + '<|endoftext|>' + d["obs1"].strip()
-        else:
-            x = d["obs1"].strip()
+        x = d["obs1"].strip()
         z = d["obs2"].strip()
         z_keywords = get_keywords(z, d["obs1"].strip(), args)
 
@@ -590,9 +586,8 @@ def abductive_reasoning(model, tokenizer, data, args, model_back=None, device='c
 
 
 def lexical_generation(model, tokenizer, data, args, model_back=None, device='cpu'):
-    outfile = '%if_zx%s_seed%d_%d_%d_%s_cw%.3f_c2w%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
+    outfile = '%s_seed%d_%d_%d_%s_cw%.3f_c2w%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
               '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_lrratio%.2f_lriter%d_%s_%s_output.json' % (
-                  args.if_zx,
                   args.version,
                   args.seed,
                   args.start,
