@@ -23,7 +23,8 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from constraints import (fluency_constraint, keyword_lexical_constraint,
                          right_context_pred_constraint, sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
-                  initialize, one_hot, post_process, post_sent, rank_and_filter, top_k_filter_3d)
+                  initialize, one_hot, post_process, post_sent, rank_and_filter, set_random_seeds,
+                  top_k_filter_3d)
 
 stop_words = set(stopwords.words('english'))
 
@@ -612,8 +613,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
 
     if args.seed != -1:
-        torch.manual_seed(args.seed)
-        np.random.seed(args.seed)
+        set_random_seeds(args.seed)
     # Load pretrained model
     model = GPT2LMHeadModel.from_pretrained(args.pretrained_model,
                                             output_hidden_states=True,

@@ -1,4 +1,7 @@
 import json
+import os
+import random
+from difflib import SequenceMatcher
 
 import nltk
 import numpy as np
@@ -11,9 +14,20 @@ nltk.download('stopwords')
 
 from nltk.corpus import stopwords
 
-from difflib import SequenceMatcher
-
 from bleuloss import batch_log_bleulosscnn_ae
+
+
+def set_random_seeds(seed):
+    """
+    set the random seed of all related libraries
+    """
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
 
 
 def freeze_module(module):
