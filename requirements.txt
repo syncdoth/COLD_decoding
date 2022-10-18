@@ -3,4 +3,4 @@ torch
 tqdm
 wandb
 transformers
-
+torchmetrics
