@@ -37,14 +37,9 @@ def options():
     parser.add_argument("--print-every", type=int, default=200)
     parser.add_argument("--pretrained_model", type=str, default="gpt2-large")
     parser.add_argument("--wandb", action="store_true")
-    parser.add_argument("--straight-through", action="store_true")
+    parser.add_argument("--straight-through", action="store_true")  # TODO: meaning?
     parser.add_argument("--topk", type=int, default=0)
     parser.add_argument("--rl-topk", type=int, default=0)
-    parser.add_argument("--lexical",
-                        type=str,
-                        default='max',
-                        choices=['max', 'ppl_max', 'all', 'bleu'])
-    parser.add_argument("--lexical-variants", action="store_true", help="")
     parser.add_argument("--if-zx", action="store_true")
     ## experiment
     parser.add_argument("--input-file",
