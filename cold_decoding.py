@@ -278,7 +278,7 @@ def decode(model,
 
     mask_t = None
 
-    for iter in range(args.num_iters):
+    for it in range(args.num_iters):
         optim.zero_grad()
         y_logits_t = y_logits + epsilon
 
@@ -321,14 +321,14 @@ def decode(model,
         loss = (1.0 - args.constraint_weight) * fluency_loss + args.constraint_weight * c_loss
         loss = loss.mean()
 
-        if iter < args.num_iters - 1:  # so that the mask_t at the last iteration will not change
+        if it < args.num_iters - 1:  # so that the mask_t at the last iteration will not change
             loss.backward()
             optim.step()
             scheduler.step()  # turn off the scheduler
             last_lr = scheduler.get_last_lr()[0]
 
-        if args.verbose and ((iter + 1) % args.print_every == 0 or iter == 0 or
-                             iter + 1 == args.num_iters):
+        if args.verbose and ((it + 1) % args.print_every == 0 or it == 0 or
+                             it + 1 == args.num_iters):
             text, _, _ = decode_with_model_topk(model,
                                                 y_logits_t,
                                                 args.topk,
@@ -337,7 +337,7 @@ def decode(model,
                                                 tokenizer,
                                                 extra_mask=z_mask)
             for bi in range(args.batch_size):
-                print(f"{iter + 1}, loss: {loss.item():.4f}, "
+                print(f"{it + 1}, loss: {loss.item():.4f}, "
                       f"fluency_loss: {fluency_loss[bi].item():.4f}, "
                       f"c_loss: {c_loss[bi].item():.4f}, "
                       f"lr: {last_lr:.4f}, |{text[bi]}|")
@@ -353,7 +353,7 @@ def decode(model,
             })
 
         ## noise
-        if iter < args.num_iters - 1:
+        if it < args.num_iters - 1:
 
             if 'grammar' in args.mode:
                 continue
@@ -361,10 +361,10 @@ def decode(model,
             large_noise_iters = [int(_) for _ in args.large_noise_iters.split(',')]
             large_gs_stds = [float(_) for _ in args.large_gs_std.split(',')]
             noise_std = 0.
-            if iter % args.noise_iters == 0:
+            if it % args.noise_iters == 0:
                 noise_last = True
                 for ni in range(len(large_noise_iters)):
-                    if iter < large_noise_iters[ni]:
+                    if it < large_noise_iters[ni]:
                         noise_last = False
                         break
                 if noise_last:
@@ -377,7 +377,7 @@ def decode(model,
                                      size=epsilon.size(),
                                      device=device,
                                      requires_grad=False)
-                if args.win_anneal_iters >= 0 and iter >= args.win_anneal_iters:
+                if args.win_anneal_iters >= 0 and it >= args.win_anneal_iters:
                     zeros = torch.zeros_like(noise)
                     noise_mix = torch.cat([zeros[:, :frozen_len], noise[:, frozen_len:]], dim=1)
                     y_logits = y_logits + noise_mix
