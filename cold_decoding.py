@@ -4,7 +4,6 @@
 import argparse
 import json
 import os
-import sys
 import time
 
 import nltk
@@ -147,12 +146,12 @@ def options():
 
 def decode(model,
            tokenizer,
-           device,
+           args,
            prompt=None,
            sent_constraint=None,
            keyword_constraint=None,
            constraint_functions=(None,),
-           args=None,
+           device='cpu',
            model_back=None):
     """
     prompt: left context   (prompt in lexical task)
@@ -400,9 +399,7 @@ def decode(model,
     return ppl_last, text, text_post
 
 
-def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
-    with open(args.input_file, 'r') as fr:
-        data = [json.loads(x) for x in fr.readlines()]
+def counterfactual_reasoning(model, tokenizer, data, args, model_back=None, device='cpu'):
     loss_rerank = 'norerank' if args.no_loss_rerank else 'rerank'
     file_name = '%s_%s_seed%d_%d_%d_%s_ngram%d_cw%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
                 '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_%s_%s_output.json' % (
@@ -476,11 +473,11 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
 
                     ppl_last, text, text_post = decode(model,
                                                        tokenizer,
-                                                       device,
+                                                       args,
                                                        prompt=text_ij,
                                                        sent_constraint=z_text_so_far,
                                                        constraint_functions=('sentence_ngram',),
-                                                       args=args,
+                                                       device=device,
                                                        model_back=model_back)
 
                     outputs.append([text_ij, text_post])
@@ -519,11 +516,7 @@ def counterfactual_reasoning(model, tokenizer, device, args, model_back=None):
     print(f"outputs: {outfile}")
 
 
-def abductive_reasoning(model, tokenizer, device, args, model_back=None):
-    with open(args.input_file, 'r') as f:
-        lines = f.readlines()
-        data = [json.loads(l.strip()) for l in lines]
-
+def abductive_reasoning(model, tokenizer, data, args, model_back=None, device='cpu'):
     outfile = '%s_seed%d_%d_%d_%s_cw%.3f_c2w%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
               '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_lrratio%.2f_lriter%d_%s_%s_output.json' % (
                   args.version,
@@ -576,13 +569,13 @@ def abductive_reasoning(model, tokenizer, device, args, model_back=None):
         for _ in range(args.repeat_batch):
             ppl_last, text, text_post = decode(model,
                                                tokenizer,
-                                               device,
+                                               args,
                                                prompt=x,
                                                sent_constraint=z,
                                                keyword_constraint=z_keywords,
                                                constraint_functions=('right_context_pred',
                                                                      'keyword'),
-                                               args=args,
+                                               device=device,
                                                model_back=model_back)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
@@ -598,14 +591,10 @@ def abductive_reasoning(model, tokenizer, device, args, model_back=None):
         fw.write(json.dumps(out) + '\n')
         fw.flush()
 
-    print("outputs: %s" % outfile)
+    print(f"outputs: {outfile}")
 
 
-def lexical_generation(model, tokenizer, device, args, model_back=None):
-    with open(args.input_file, 'r') as f:
-        lines = f.readlines()
-        data = [json.loads(l.strip()) for l in lines]
-
+def lexical_generation(model, tokenizer, data, args, model_back=None, device='cpu'):
     outfile = '%if_zx%s_seed%d_%d_%d_%s_cw%.3f_c2w%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
               '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_lrratio%.2f_lriter%d_%s_%s_output.json' % (
                   args.if_zx,
@@ -647,19 +636,18 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
         for _ in range(args.repeat_batch):
             ppl_last, text, text_post = decode(model,
                                                tokenizer,
-                                               device,
+                                               args,
                                                prompt=None,
                                                sent_constraint=". " + constraints,
                                                keyword_constraint=constraints,
                                                constraint_functions=('right_context_pred',
                                                                      'keyword'),
-                                               args=args,
+                                               device=device,
                                                model_back=model_back)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
 
         out = {
-            'x': x,
             'constraints': constraints,
             'generation': text_candidates,
             'generation_complete': text_complete_candidates,
@@ -670,74 +658,7 @@ def lexical_generation(model, tokenizer, device, args, model_back=None):
         fw_pretty.write(json.dumps(out, indent=4) + '\n')
         fw_pretty.flush()
 
-    print("outputs: %s" % outfile)
-
-
-""" Deprecated; grammar_correction
-def grammar_correction(model, tokenizer, device, args, model_back=None):
-    fr = open(args.input_file, 'r')
-    data = [x.strip() for x in fr.readlines()]
-    file_name = '%s_seed%d_%d_%d_%s_cw%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
-                '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_%s_%s_output.json' % (
-                    args.version,
-                    args.seed,
-                    args.start,
-                    args.end,
-                    args.mode,
-                    args.constraint_weight,
-                    args.lr_nll_portion,
-                    args.length,
-                    args.topk,
-                    args.num_iters,
-                    args.frozen_length,
-                    args.win_anneal_iters,
-                    args.noise_iters,
-                    args.gs_std,
-                    args.stepsize,
-                    args.large_noise_iters,
-                    args.large_gs_std)
-
-    outfile = os.path.join(args.output_dir, file_name)
-    fw = open(outfile, 'w')
-
-    # Grammar
-    data = [[' '.join(x.split()[:3]), ' '.join(x.split()[3:])] for x in data]
-    print('#data: ', len(data))
-
-    for i, d in enumerate(data):
-        if i < args.start or i > args.end:
-            continue
-        print("%d / %d" % (i, len(data)))
-        print('Output to: \t', outfile)
-
-        if len(d[1].split()) <= 4:
-            text = [d[1][2:]]
-            text_post = [d[1][2:]]
-            continue
-
-        x = d[0]
-        y = d[1]
-
-        y = ". " + y
-
-        ppl_last, text, text_post = decode(model,
-                                           tokenizer,
-                                           device,
-                                           x,
-                                           y,
-                                           None,
-                                           args,
-                                           model_back=model_back)
-        out = {
-            'original': x + " " + y,
-            'generation': text,
-            'generation_complete': text_post,
-        }
-
-        fw.write(json.dumps(out) + '\n')
-
-    print("outputs: %s" % outfile)
-"""
+    print(f"outputs: {outfile}")
 
 
 def main():
@@ -763,8 +684,7 @@ def main():
     tokenizer = GPT2Tokenizer.from_pretrained(args.pretrained_model)
 
     if args.use_back_model:
-        sys.path.insert(0, './GPT2ForwardBackward')
-        from modeling_opengpt2 import OpenGPT2LMHeadModel
+        from GPT2ForwardBackward.modeling_opengpt2 import OpenGPT2LMHeadModel
         model_back = OpenGPT2LMHeadModel.from_pretrained(args.back_model,
                                                          hidden_dropout_prob=0,
                                                          attention_probs_dropout_prob=0,
@@ -772,21 +692,25 @@ def main():
         model_back.to(device)
         model_back.eval()
         # Freeze GPT-2 weights
-        for param in model_back.parameters():
-            param.requires_grad = False
+        freeze_module(model_back)
     else:
         model_back = None
 
-    if "counterfactual" in args.mode:
-        counterfactual_reasoning(model, tokenizer, device, args, model_back=model_back)
-    if "abductive" in args.mode:
-        abductive_reasoning(model, tokenizer, device, args, model_back=model_back)
-    if "lexical" in args.mode:
-        lexical_generation(model, tokenizer, device, args, model_back=model_back)
+    # Load data
+    with open(args.input_file, 'r', encoding='utf-8') as fr:
+        if args.input_file.endswith('.json'):
+            data = [json.loads(l.strip()) for l in fr.readlines()]
+        else:
+            raise NotImplementedError
 
-    # deprecated
-    # if "grammar" in args.mode:
-    #     grammar_correction(model, tokenizer, device, args, model_back=model_back)
+    if "counterfactual" in args.mode:
+        exp_run = counterfactual_reasoning
+    elif "abductive" in args.mode:
+        exp_run = abductive_reasoning
+    elif "lexical" in args.mode:
+        exp_run = lexical_generation
+
+    exp_run(model, tokenizer, data, args, model_back=model_back, device=device)
 
 
 if __name__ == "__main__":
