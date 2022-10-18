@@ -205,6 +205,15 @@ def decode(model,
         # [B, K]
         keywords_encoded = keywords_encoded.unsqueeze(0).repeat(args.batch_size, 1)
 
+    # device management
+    x_encoded = x_encoded.to(device)
+    x_onehot = x_onehot.to(device)
+    z_encoded = z_encoded.to(device)
+    z_onehot = z_onehot.to(device)
+    z_mask = z_mask.to(device)
+    if keyword_constraint is not None:
+        keywords_encoded = keywords_encoded.to(device)
+
     if args.verbose:
         print(f"prompt:\t|{prompt}|\n"
               f"main constraint:\t|{sent_constraint}|\n"
