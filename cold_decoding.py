@@ -282,7 +282,7 @@ def decode(model,
 
         # n-gram similarity constraint
         constraint_loss = {}
-        if "sentence_ngram" in constraint_functions:
+        if "sentence_ngram" in constraint_functions and args.sentence_ngram_weight > 0:
             filtered_y_logits = top_k_filter_3d(y_logits_t,
                                                 args.topk,
                                                 mask=mask_t,
@@ -291,13 +291,13 @@ def decode(model,
                 filtered_y_logits, z_encoded, max_ngram=args.counterfactual_max_ngram)
             constraint_loss["sentence_ngram"] = sent_ngram_loss * args.sentence_ngram_weight
 
-        if "right_context_pred" in constraint_functions:
+        if "right_context_pred" in constraint_functions and args.right_context_pred_weight > 0:
             # right-context prediction constraint
             r_pred_loss = right_context_pred_constraint(model, args, z_encoded, z_onehot,
                                                         y_logits_t, soft_forward_x)
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
-        if "keyword" in constraint_functions:
+        if "keyword" in constraint_functions and args.keyword_weight > 0:
             # right-context n-gram similarity constraint
             kw_loss = keyword_lexical_constraint(y_logits, keywords_encoded)
             constraint_loss["keyword"] = kw_loss * args.keyword_weight

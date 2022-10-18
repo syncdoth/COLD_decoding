@@ -12,13 +12,15 @@ python3 cold_decoding.py  \
 	--num-iters 2000 \
 	--min-iters 1000 \
 	--constraint-weight 0.5 \
-    --abductive-c2-weight 0.05 \
+	--sentence_ngram_weight 0.0 \
+	--right_context_pred_weight 1.0 \
+    --keyword_weight 0.05 \
 	--stepsize 0.1 \
 	--noise-iters 1 \
 	--win-anneal-iters 1000 \
 	--start 0 \
 	--end 5 \
-	--lr-nll-portion 0.6 \
+	--lr-nll-portion 1.0 \
     --topk 2 \
     --output-lgt-temp 1 \
 	--verbose \
@@ -28,5 +30,5 @@ python3 cold_decoding.py  \
 	--input-file "./data/abductive/small_data.json" \
 	--output-dir "./data/abductive/" \
 	--stepsize-ratio 1  \
-    --batch-size 16 \
+    --batch-size 8 \
     --print-every 200
