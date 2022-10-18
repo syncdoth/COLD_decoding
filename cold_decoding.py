@@ -12,6 +12,8 @@ import torch
 import pandas as pd
 import wandb
 
+from selfcond.generation import force_units_hooks
+
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('averaged_perceptron_tagger')
@@ -148,6 +150,7 @@ def options():
 
     # selfcond (expert units) params
     parser.add_argument("--selfcond", action="store_true", help="whether to use selfcond")
+    parser.add_argument("--selfcond_mode", type=str, default="constraint", choices=["constraint", "force"], help="whether to force expert neurons or use them as a constraint")
     parser.add_argument("--selfcond_weight", type=float, default=0.1)
     parser.add_argument("--expertise", type=str, help="Expertise results as CSV file.")
     parser.add_argument(
@@ -214,12 +217,8 @@ def decode(model,
     constraint_functions: list of function names to use as constraint.
         currently supports ('sentence_ngram', 'right_context_pred', 'keyword')
     """
-    if not isinstance(model, nn.Module):
-        model_wrapper = model
-        model = model.module
-
     if "selfcond" in args.mode:
-        df, expert_layer_names, expert_units, expert_refs = get_expert_reference(
+        df, expert_per_layer = get_expert_reference(
             expertise,
             value,
             metric,
@@ -227,6 +226,20 @@ def decode(model,
             top_n=top_n,
             use_layers=use_layers,
         )
+        if args.selfcond_mode == "force":
+            model, df_force = force_units_hooks(
+                                model=model,
+                                expertise=expertise,
+                                value=value,
+                                metric=metric,
+                                num_units=num_units,
+                                top_n=top_n,
+                                use_layers=use_layers,
+                                only_last_token=only_last_token,
+                            )
+
+        model_wrapper = model
+        model = model_wrapper.module
 
     model.eval()
 
@@ -341,8 +354,8 @@ def decode(model,
     else:
         x_model_outputs = model(x_encoded[:, :-1])
         x_model_past = x_model_outputs.past_key_values
-        # TODO: this may be erroneous
-        x_model_past = [_.detach() for _ in x_model_past]
+        x_model_past = [(p[0].detach(), p[1].detach()) if isinstance(p, tuple) else p.detach()
+                        for p in x_model_past]
 
     mask_t = None
 
@@ -361,6 +374,8 @@ def decode(model,
             z_mask=z_mask,
             z_onehot=z_onehot,
         )
+
+        c_loss = 0
 
         # n-gram similarity constraint
         constraint_loss = {}
@@ -384,10 +399,11 @@ def decode(model,
             kw_loss = keyword_lexical_constraint(y_logits, keywords_encoded)
             constraint_loss["keyword"] = kw_loss * args.keyword_weight
 
-        if "selfcond" in constraint_functions and args.selfcond_weight > 0:
+        if "selfcond" in constraint_functions and args.selfcond_weight > 0 and args.selfcond_mode == 'constraint':
             expert_loss = expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_t, x_model_past,
-                                                       expert_layer_names, expert_units, expert_refs, args,
+                                                       expert_per_layer, args,
                                                        only_last_token=only_last_token, mask_t=mask_t, z_mask=z_mask)
+
             constraint_loss["keyword"] = expert_loss * args.selfcond_weight
 
         c_loss = sum(constraint_loss.values())
@@ -521,8 +537,7 @@ def counterfactual_reasoning(model,
         outputs = []
         for oi, z_sent in enumerate(ori_endings):  # per sentence in original ending
             print(f"Sentence {oi}")
-            z_text_so_far = z_sent.strip()
-            z_text_so_far = ". " + z_text_so_far
+            z_text_so_far = ". " + z_sent.strip()
 
             assert len(x_text_so_far) == len(x_addon), f"{len(x_text_so_far)} vs {len(x_addon)}"
 
@@ -698,8 +713,10 @@ def main():
     if args.seed != -1:
         set_random_seeds(args.seed)
     # Load pretrained model
-    if 'selfcond' in args.mode:
+    if args.selfcond:
+        cache_dir = os.path.join(os.path.expanduser('~'), '.cache/huggingface/transformers/')
         model = PytorchTransformersModel(args.pretrained_model,
+                                         cache_dir,
                                          seq_len=args.length,
                                          device=device)
         model.module.eval()
@@ -748,9 +765,7 @@ def main():
         'use_layers': (
             list(expertise_df.sort_values("layer").layer.unique())
             if expertise_df is not None and args.per_layer
-            else [
-                None,
-            ]
+            else None
         ),
         'only_last_token': args.only_last_token,
     }

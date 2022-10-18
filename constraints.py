@@ -124,7 +124,7 @@ def sentence_ngram_similarity_constraint(y_logits_t, target_sent_id, max_ngram=4
 
 
 def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_model_past,
-                                 expert_layer_names, expert_units, expert_refs, args,
+                                 expert_per_layer, args,
                                  only_last_token=False, mask_t=None, z_mask=None):
     # get response of all expert neurons
     soft_forward_y = y_logits_ / 0.001
@@ -140,14 +140,16 @@ def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_mod
         x_onehot=soft_forward_x,
         device=soft_forward_x.device
     )
-    input_batch = {'past_key_values': x_model_past, 'input_embeds': xy_embeds}
+    input_batch = {'past_key_values': x_model_past, 'inputs_embeds': xy_embeds}
     # collect response during soft forward
-    response_batch = model_wrapper.run_inference(inputs=input_batch, outputs=expert_layer_names)
+    response_batch = model_wrapper.run_inference(inputs=input_batch, outputs=expert_per_layer.keys(), trainable=True)
 
     # all_vals.shape = [n_layer, U]
     references = []
     current_activations = []
-    for layer_name, unit, ref in zip(expert_layer_names, expert_units, expert_refs):
+    for layer_name, val in expert_per_layer.items():
+        unit = val['units']
+        ref = val['values']
         if only_last_token:
                     # [B, U]
             curr_expert_act = response_batch[layer_name][:, -1, unit]
@@ -161,6 +163,10 @@ def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_mod
 
     current_activations = torch.cat(current_activations, -1)  # [B, U] or [B, T, U]
     references = torch.cat(references, -1)  # [1, U] or [1, 1, U]
+    references = references.to(current_activations.device)
 
-    expert_loss = torch.nn.functional.mse_loss(current_activations, references)
+    expert_loss = torch.nn.functional.mse_loss(current_activations, references, reduction='none')
+    expert_loss = expert_loss.mean(-1)
+    if len(expert_loss.shape) > 1:
+        expert_loss = expert_loss.mean(-1)
     return expert_loss
