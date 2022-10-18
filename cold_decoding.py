@@ -74,8 +74,14 @@ def options():
                         default=0,
                         help="length of optimization window in sequence.")
     parser.add_argument("--constraint-weight", type=float, default=0.1)
-    parser.add_argument("--sentence_ngram_weight", type=float, default=1.0)
-    parser.add_argument("--right_context_pred_weight", type=float, default=1.0)
+    parser.add_argument("--sentence_ngram_weight",
+                        type=float,
+                        default=1.0,
+                        help="without specific reason, this stays 1 in the original implementation")
+    parser.add_argument("--right_context_pred_weight",
+                        type=float,
+                        default=1.0,
+                        help="without specific reason, this stays 1 in the original implementation")
     parser.add_argument("--keyword_weight", type=float, default=0.05)
     parser.add_argument("--abductive-filterx",
                         action="store_true",
@@ -393,34 +399,15 @@ def decode(model,
     return ppl_last, text, text_post
 
 
-def counterfactual_reasoning(model, tokenizer, data, args, model_back=None, device='cpu'):
-    loss_rerank = 'norerank' if args.no_loss_rerank else 'rerank'
-    file_name = '%s_%s_seed%d_%d_%d_%s_ngram%d_cw%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
-                '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_%s_%s_output.json' % (
-                    args.version,
-                    loss_rerank,
-                    args.seed,
-                    args.start,
-                    args.end,
-                    args.mode,
-                    args.counterfactual_max_ngram,
-                    args.constraint_weight,
-                    args.lr_nll_portion,
-                    args.length,
-                    args.topk,
-                    args.num_iters,
-                    args.frozen_length,
-                    args.win_anneal_iters,
-                    args.noise_iters,
-                    args.gs_std,
-                    args.stepsize,
-                    args.large_noise_iters,
-                    args.large_gs_std)
-
-    outfile = os.path.join(args.output_dir, file_name)
-
-    fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + file_name), 'w')
-    fw_res = open(os.path.join(args.output_dir, 'res_' + file_name), 'w')
+def counterfactual_reasoning(model,
+                             tokenizer,
+                             data,
+                             args,
+                             model_back=None,
+                             device='cpu',
+                             outfile='output.json'):
+    fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
+    fw_res = open(os.path.join(args.output_dir, 'res_' + outfile), 'w')
 
     procssed = set()
     for i, d in enumerate(data):
@@ -432,7 +419,6 @@ def counterfactual_reasoning(model, tokenizer, data, args, model_back=None, devi
             np.random.seed(args.seed)
 
         print(f"{i} / {len(data)}")
-        print('Output to: \t', outfile)
         print('output-lgt-temp:\t', args.output_lgt_temp)
 
         premise = d.get('premise', "")
@@ -510,31 +496,13 @@ def counterfactual_reasoning(model, tokenizer, data, args, model_back=None, devi
     print(f"outputs: {outfile}")
 
 
-def abductive_reasoning(model, tokenizer, data, args, model_back=None, device='cpu'):
-    outfile = '%s_seed%d_%d_%d_%s_cw%.3f_c2w%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
-              '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_lrratio%.2f_lriter%d_%s_%s_output.json' % (
-                  args.version,
-                  args.seed,
-                  args.start,
-                  args.end,
-                  args.mode,
-                  args.constraint_weight,
-                  args.keyword_weight,
-                  args.lr_nll_portion,
-                  args.length,
-                  args.topk,
-                  args.num_iters,
-                  args.frozen_length,
-                  args.win_anneal_iters,
-                  args.noise_iters,
-                  args.gs_std,
-                  args.stepsize,
-                  args.stepsize_ratio,
-                  args.stepsize_iters,
-                  args.large_noise_iters,
-                  args.large_gs_std)
-    print("outputs: %s" % outfile)
-
+def abductive_reasoning(model,
+                        tokenizer,
+                        data,
+                        args,
+                        model_back=None,
+                        device='cpu',
+                        outfile='output.json'):
     fw = open(os.path.join(args.output_dir, outfile), 'w')
 
     procssed = set()
@@ -585,31 +553,13 @@ def abductive_reasoning(model, tokenizer, data, args, model_back=None, device='c
     print(f"outputs: {outfile}")
 
 
-def lexical_generation(model, tokenizer, data, args, model_back=None, device='cpu'):
-    outfile = '%s_seed%d_%d_%d_%s_cw%.3f_c2w%.3f_lrnllp%.3f_len%d_topk%d_niter%d_frozlen%d' \
-              '_winiter%d_noiseiter%d_gsstd%.4f_lr%.3f_lrratio%.2f_lriter%d_%s_%s_output.json' % (
-                  args.version,
-                  args.seed,
-                  args.start,
-                  args.end,
-                  args.mode,
-                  args.constraint_weight,
-                  args.keyword_weight,
-                  args.lr_nll_portion,
-                  args.length,
-                  args.topk,
-                  args.num_iters,
-                  args.frozen_length,
-                  args.win_anneal_iters,
-                  args.noise_iters,
-                  args.gs_std,
-                  args.stepsize,
-                  args.stepsize_ratio,
-                  args.stepsize_iters,
-                  args.large_noise_iters,
-                  args.large_gs_std)
-    print("outputs: %s" % outfile)
-
+def lexical_generation(model,
+                       tokenizer,
+                       data,
+                       args,
+                       model_back=None,
+                       device='cpu',
+                       outfile='output.json'):
     fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
 
     for i, d in enumerate(data):
@@ -618,9 +568,7 @@ def lexical_generation(model, tokenizer, data, args, model_back=None, device='cp
         print(d["concept_set"])
         constraints = ' '.join(d["concept_set"].split("#"))
 
-        print("%d / %d" % (i, len(data)))
-        print('Output to: \t', outfile)
-
+        print(f"{i} / {len(data)}")
         text_candidates = []
         text_complete_candidates = []
         for _ in range(args.repeat_batch):
@@ -643,7 +591,6 @@ def lexical_generation(model, tokenizer, data, args, model_back=None, device='cp
             'generation_complete': text_complete_candidates,
         }
         print(out)
-        print('Output to: \t', outfile)
 
         fw_pretty.write(json.dumps(out, indent=4) + '\n')
         fw_pretty.flush()
@@ -693,6 +640,18 @@ def main():
         else:
             raise NotImplementedError
 
+    # output file
+    loss_rerank = 'norerank' if args.no_loss_rerank else 'rerank'
+    outfile = (
+        f'{args.version}_seed{args.seed}_{args.start}_{args.end}_{args.mode}'
+        f'_cw{args.constraint_weight:.3f}_kwc{args.keyword_weight:.3f}'
+        f'_{loss_rerank}_ngram{args.counterfactual_max_ngram}'
+        f'_lrnllp{args.lr_nll_portion:.3f}_len{args.length}_topk{args.topk}'
+        f'_niter{args.num_iters}_frozlen{args.frozen_length}'
+        f'_winiter{args.win_anneal_iters}_noiseiter{args.noise_iters}_gsstd{args.gs_std:.4f}'
+        f'_lr{args.stepsize:.3f}_lrratio{args.stepsize_ratio:.2f}'
+        f'_lriter{args.stepsize_iters}_{args.large_noise_iters}_{args.large_gs_std}_output.json')
+
     if "counterfactual" in args.mode:
         exp_run = counterfactual_reasoning
     elif "abductive" in args.mode:
@@ -700,7 +659,7 @@ def main():
     elif "lexical" in args.mode:
         exp_run = lexical_generation
 
-    exp_run(model, tokenizer, data, args, model_back=model_back, device=device)
+    exp_run(model, tokenizer, data, args, model_back=model_back, device=device, outfile=outfile)
 
 
 if __name__ == "__main__":
