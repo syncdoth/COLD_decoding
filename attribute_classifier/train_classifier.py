@@ -167,7 +167,7 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
                 best_valid_loss = epoch_valid_loss
                 # saving using process (rank) 0 only as all processes are in sync
                 save_name = os.path.join(args.checkpoint_dir, 'best.pth')
-                torch.save(model.state_dict(), save_name)
+                torch.save(model.score.state_dict(), save_name)
             epoch_valid_loss = None  # reset loss
 
     if args.verbose:
