@@ -9,7 +9,10 @@ import time
 import nltk
 import numpy as np
 import torch
+import pandas as pd
 import wandb
+
+from selfcond.generation import force_units_hooks
 
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -19,12 +22,16 @@ from nltk import tokenize
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from torch import nn
 
-from constraints import (fluency_constraint, keyword_lexical_constraint,
+from constraints import (expert_activation_constraint, fluency_constraint, keyword_lexical_constraint,
                          right_context_pred_constraint, sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
                   initialize, one_hot, post_process, post_sent, rank_and_filter, set_random_seeds,
                   top_k_filter_3d)
+
+from selfcond.models import PytorchTransformersModel
+from selfcond.expertise import get_expert_reference
 
 stop_words = set(stopwords.words('english'))
 
@@ -141,6 +148,48 @@ def options():
     parser.add_argument("--large-noise-iters", type=str, default="-1", help="Example: '50,1000'")
     parser.add_argument("--large_gs_std", type=str, default="1", help="Example: '1,0.1'")
 
+    # selfcond (expert units) params
+    parser.add_argument("--selfcond", action="store_true", help="whether to use selfcond")
+    parser.add_argument("--selfcond_mode", type=str, default="constraint", choices=["constraint", "force"], help="whether to force expert neurons or use them as a constraint")
+    parser.add_argument("--selfcond_weight", type=float, default=0.1)
+    parser.add_argument("--expertise", type=str, help="Expertise results as CSV file.")
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default="ap",
+        help="Metric to use to rank experts for generation.",
+    )
+    parser.add_argument("--forcing", type=str, default="on_p50", help="Forcing value.")
+    parser.add_argument(
+        "--num_units",
+        type=int,
+        default=1,
+        help=(
+            "Number of units (top experts in terms of --metric) to be intervened on during"
+            " generation"
+        ),
+    )
+    parser.add_argument(
+        "--top_n",
+        type=int,
+        default=1,
+        help=(
+            "Which set of top units to use. If set to 1, units from [0, --num-units] are used. "
+            "If set to 2, units from [--num-units, 2*--num-units] are used. And so on. "
+            "If set to 0, --num-units random units are selected."
+        ),
+    )
+    parser.add_argument(
+        "--per_layer",
+        action="store_true",
+        help="If set, force --num-units per layer at a time.",
+    )
+    parser.add_argument(
+        "--only_last_token",
+        action="store_true",
+        help="If set, force only last token.",
+    )
+
     args = parser.parse_args()
     return args
 
@@ -153,7 +202,14 @@ def decode(model,
            keyword_constraint=None,
            constraint_functions=(None,),
            device='cpu',
-           model_back=None):
+           model_back=None,
+           expertise=None,
+           value=None,
+           metric=None,
+           num_units=1,
+           top_n=1,
+           use_layers=None,
+           only_last_token=False):
     """
     prompt: left context   (prompt in lexical task)
     sent_constraint: optimization target  (original ending in counterfactual task)
@@ -161,6 +217,30 @@ def decode(model,
     constraint_functions: list of function names to use as constraint.
         currently supports ('sentence_ngram', 'right_context_pred', 'keyword')
     """
+    if "selfcond" in args.mode:
+        df, expert_per_layer = get_expert_reference(
+            expertise,
+            value,
+            metric,
+            num_units=num_units,
+            top_n=top_n,
+            use_layers=use_layers,
+        )
+        if args.selfcond_mode == "force":
+            model, df_force = force_units_hooks(
+                                model=model,
+                                expertise=expertise,
+                                value=value,
+                                metric=metric,
+                                num_units=num_units,
+                                top_n=top_n,
+                                use_layers=use_layers,
+                                only_last_token=only_last_token,
+                            )
+
+        model_wrapper = model
+        model = model_wrapper.module
+
     model.eval()
 
     prompt = "<|endoftext|>" if prompt is None else prompt
@@ -274,8 +354,8 @@ def decode(model,
     else:
         x_model_outputs = model(x_encoded[:, :-1])
         x_model_past = x_model_outputs.past_key_values
-        # TODO: this may be erroneous
-        x_model_past = [_.detach() for _ in x_model_past]
+        x_model_past = [(p[0].detach(), p[1].detach()) if isinstance(p, tuple) else p.detach()
+                        for p in x_model_past]
 
     mask_t = None
 
@@ -294,6 +374,8 @@ def decode(model,
             z_mask=z_mask,
             z_onehot=z_onehot,
         )
+
+        c_loss = 0
 
         # n-gram similarity constraint
         constraint_loss = {}
@@ -316,6 +398,13 @@ def decode(model,
             # right-context n-gram similarity constraint
             kw_loss = keyword_lexical_constraint(y_logits, keywords_encoded)
             constraint_loss["keyword"] = kw_loss * args.keyword_weight
+
+        if "selfcond" in constraint_functions and args.selfcond_weight > 0 and args.selfcond_mode == 'constraint':
+            expert_loss = expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_t, x_model_past,
+                                                       expert_per_layer, args,
+                                                       only_last_token=only_last_token, mask_t=mask_t, z_mask=z_mask)
+
+            constraint_loss["keyword"] = expert_loss * args.selfcond_weight
 
         c_loss = sum(constraint_loss.values())
 
@@ -415,7 +504,8 @@ def counterfactual_reasoning(model,
                              args,
                              model_back=None,
                              device='cpu',
-                             outfile='output.json'):
+                             outfile='output.json',
+                             **expert_kwargs):
     fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
     fw_res = open(os.path.join(args.output_dir, 'res_' + outfile), 'w')
 
@@ -447,8 +537,7 @@ def counterfactual_reasoning(model,
         outputs = []
         for oi, z_sent in enumerate(ori_endings):  # per sentence in original ending
             print(f"Sentence {oi}")
-            z_text_so_far = z_sent.strip()
-            z_text_so_far = ". " + z_text_so_far
+            z_text_so_far = ". " + z_sent.strip()
 
             assert len(x_text_so_far) == len(x_addon), f"{len(x_text_so_far)} vs {len(x_addon)}"
 
@@ -468,12 +557,17 @@ def counterfactual_reasoning(model,
                                                        sent_constraint=z_text_so_far,
                                                        constraint_functions=('sentence_ngram',),
                                                        device=device,
-                                                       model_back=model_back)
+                                                       model_back=model_back,
+                                                       **expert_kwargs)
 
                     outputs.append([text_ij, text_post])
 
                     #  Rank and filter text_post from util.py:
                     text_post = [post_sent(x) for x in text_post]
+                    if not isinstance(model, nn.Module):
+                        torch_module = model.module
+                    else:
+                        torch_module = model
                     text_post = rank_and_filter(text_post, text_ij, z_text_so_far, model, tokenizer,
                                                 device, args.no_loss_rerank)
 
@@ -512,7 +606,8 @@ def abductive_reasoning(model,
                         args,
                         model_back=None,
                         device='cpu',
-                        outfile='output.json'):
+                        outfile='output.json',
+                        **expert_kwargs):
     fw = open(os.path.join(args.output_dir, outfile), 'w')
 
     procssed = set()
@@ -545,7 +640,8 @@ def abductive_reasoning(model,
                                                constraint_functions=('right_context_pred',
                                                                      'keyword'),
                                                device=device,
-                                               model_back=model_back)
+                                               model_back=model_back,
+                                               **expert_kwargs)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
 
@@ -569,7 +665,8 @@ def lexical_generation(model,
                        args,
                        model_back=None,
                        device='cpu',
-                       outfile='output.json'):
+                       outfile='output.json',
+                       **expert_kwargs):
     fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
 
     for i, d in enumerate(data):
@@ -591,7 +688,8 @@ def lexical_generation(model,
                                                constraint_functions=('right_context_pred',
                                                                      'keyword'),
                                                device=device,
-                                               model_back=model_back)
+                                               model_back=model_back,
+                                               **expert_kwargs)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
 
@@ -615,16 +713,26 @@ def main():
     if args.seed != -1:
         set_random_seeds(args.seed)
     # Load pretrained model
-    model = GPT2LMHeadModel.from_pretrained(args.pretrained_model,
-                                            output_hidden_states=True,
-                                            resid_pdrop=0,
-                                            embd_pdrop=0,
-                                            attn_pdrop=0,
-                                            summary_first_dropout=0)
-    model.to(device)
-    model.eval()
-    # Freeze GPT-2 weights
-    freeze_module(model)
+    if args.selfcond:
+        cache_dir = os.path.join(os.path.expanduser('~'), '.cache/huggingface/hub/')
+        model = PytorchTransformersModel(args.pretrained_model,
+                                         cache_dir,
+                                         seq_len=args.length,
+                                         device=device)
+        model.module.eval()
+        # Freeze PTLM weights
+        freeze_module(model.module)
+    else:
+        model = GPT2LMHeadModel.from_pretrained(args.pretrained_model,
+                                                output_hidden_states=True,
+                                                resid_pdrop=0,
+                                                embd_pdrop=0,
+                                                attn_pdrop=0,
+                                                summary_first_dropout=0)
+        model.to(device)
+        model.eval()
+        # Freeze GPT-2 weights
+        freeze_module(model)
 
     # Load tokenizer
     tokenizer = GPT2Tokenizer.from_pretrained(args.pretrained_model)
@@ -641,6 +749,26 @@ def main():
         freeze_module(model_back)
     else:
         model_back = None
+
+    # selfcond
+    if args.selfcond:
+        args.mode += '-selfcond'
+        expertise_df = pd.read_csv(args.expertise)
+    else:
+        expertise_df = None
+    expert_kwargs = {
+        'expertise': expertise_df,
+        'value': args.forcing,
+        'metric': args.metric,
+        'num_units': args.num_units,
+        'top_n': args.top_n,
+        'use_layers': (
+            list(expertise_df.sort_values("layer").layer.unique())
+            if expertise_df is not None and args.per_layer
+            else None
+        ),
+        'only_last_token': args.only_last_token,
+    }
 
     # Load data
     with open(args.input_file, 'r', encoding='utf-8') as fr:
@@ -671,7 +799,7 @@ def main():
     elif "lexical" in args.mode:
         exp_run = lexical_generation
 
-    exp_run(model, tokenizer, data, args, model_back=model_back, device=device, outfile=outfile)
+    exp_run(model, tokenizer, data, args, model_back=model_back, device=device, outfile=outfile, **expert_kwargs)
 
 
 if __name__ == "__main__":
