@@ -24,12 +24,14 @@ from nltk.tokenize import word_tokenize
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from torch import nn
 
-from constraints import (expert_activation_constraint, fluency_constraint, keyword_lexical_constraint,
-                         right_context_pred_constraint, sentence_ngram_similarity_constraint)
+from constraints import (attr_control_constraint, expert_activation_constraint, fluency_constraint,
+                         keyword_lexical_constraint, right_context_pred_constraint,
+                         sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
                   initialize, one_hot, post_process, post_sent, rank_and_filter, set_random_seeds,
                   top_k_filter_3d)
 
+from attribute_classifier.attribute_classifier_model import DoubleHeadModel
 from selfcond.models import PytorchTransformersModel
 from selfcond.expertise import get_expert_reference
 
@@ -150,7 +152,11 @@ def options():
 
     # selfcond (expert units) params
     parser.add_argument("--selfcond", action="store_true", help="whether to use selfcond")
-    parser.add_argument("--selfcond_mode", type=str, default="constraint", choices=["constraint", "force"], help="whether to force expert neurons or use them as a constraint")
+    parser.add_argument("--selfcond_mode",
+                        type=str,
+                        default="constraint",
+                        choices=["constraint", "force"],
+                        help="whether to force expert neurons or use them as a constraint")
     parser.add_argument("--selfcond_weight", type=float, default=0.1)
     parser.add_argument("--expertise", type=str, help="Expertise results as CSV file.")
     parser.add_argument(
@@ -164,20 +170,16 @@ def options():
         "--num_units",
         type=int,
         default=1,
-        help=(
-            "Number of units (top experts in terms of --metric) to be intervened on during"
-            " generation"
-        ),
+        help=("Number of units (top experts in terms of --metric) to be intervened on during"
+              " generation"),
     )
     parser.add_argument(
         "--top_n",
         type=int,
         default=1,
-        help=(
-            "Which set of top units to use. If set to 1, units from [0, --num-units] are used. "
-            "If set to 2, units from [--num-units, 2*--num-units] are used. And so on. "
-            "If set to 0, --num-units random units are selected."
-        ),
+        help=("Which set of top units to use. If set to 1, units from [0, --num-units] are used. "
+              "If set to 2, units from [--num-units, 2*--num-units] are used. And so on. "
+              "If set to 0, --num-units random units are selected."),
     )
     parser.add_argument(
         "--per_layer",
@@ -189,6 +191,30 @@ def options():
         action="store_true",
         help="If set, force only last token.",
     )
+    # attribute control classifer
+    parser.add_argument(
+        "--use_attribute_classifer",
+        action="store_true",
+        help="use attribute classifer constraint. (Controlled generation)",
+    )
+    parser.add_argument(
+        "--attribute_classifier_path",
+        type=str,
+        help="path to the saved checkpoint file.",
+    )
+    parser.add_argument("--num_attributes",
+                        type=int,
+                        default=2,
+                        help="number of labels in the attribute classifier")
+    parser.add_argument("--attr_control_weight", type=float, default=1.0)
+    parser.add_argument("--pool_method",
+                        type=str,
+                        choices=["last", "mean", "max"],
+                        help="how to pool hidden states in attr classifier")
+    parser.add_argument("--attr_cls_idx",
+                        type=int,
+                        help="the index of the desired attribute we want to control.")
+
 
     args = parser.parse_args()
     return args
@@ -215,7 +241,7 @@ def decode(model,
     sent_constraint: optimization target  (original ending in counterfactual task)
     keyword_constraint: (constraint set in lexical constrained task)
     constraint_functions: list of function names to use as constraint.
-        currently supports ('sentence_ngram', 'right_context_pred', 'keyword')
+        currently supports ('sentence_ngram', 'right_context_pred', 'keyword', 'attr_control')
     """
     if "selfcond" in args.mode:
         df, expert_per_layer = get_expert_reference(
@@ -228,15 +254,15 @@ def decode(model,
         )
         if args.selfcond_mode == "force":
             model, df_force = force_units_hooks(
-                                model=model,
-                                expertise=expertise,
-                                value=value,
-                                metric=metric,
-                                num_units=num_units,
-                                top_n=top_n,
-                                use_layers=use_layers,
-                                only_last_token=only_last_token,
-                            )
+                model=model,
+                expertise=expertise,
+                value=value,
+                metric=metric,
+                num_units=num_units,
+                top_n=top_n,
+                use_layers=use_layers,
+                only_last_token=only_last_token,
+            )
 
         model_wrapper = model
         model = model_wrapper.module
@@ -399,10 +425,29 @@ def decode(model,
             kw_loss = keyword_lexical_constraint(y_logits, keywords_encoded)
             constraint_loss["keyword"] = kw_loss * args.keyword_weight
 
+        if "attr_control" in constraint_functions and args.attr_control_weight > 0:
+            # attribute control with classifer gradients
+            attr_control_loss = attr_control_constraint(model,
+                                                        args,
+                                                        y_logits_t,
+                                                        soft_forward_x,
+                                                        x_model_past,
+                                                        mask_t=mask_t,
+                                                        z_mask=z_mask,
+                                                        pool_method=args.pool_method,
+                                                        attribute_class_idx=args.attr_cls_idx)
+            constraint_loss["attr_control"] = attr_control_loss * args.attr_control_weight
+
         if "selfcond" in constraint_functions and args.selfcond_weight > 0 and args.selfcond_mode == 'constraint':
-            expert_loss = expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_t, x_model_past,
-                                                       expert_per_layer, args,
-                                                       only_last_token=only_last_token, mask_t=mask_t, z_mask=z_mask)
+            expert_loss = expert_activation_constraint(model_wrapper,
+                                                       soft_forward_x,
+                                                       y_logits_t,
+                                                       x_model_past,
+                                                       expert_per_layer,
+                                                       args,
+                                                       only_last_token=only_last_token,
+                                                       mask_t=mask_t,
+                                                       z_mask=z_mask)
 
             constraint_loss["keyword"] = expert_loss * args.selfcond_weight
 
@@ -750,6 +795,14 @@ def main():
     else:
         model_back = None
 
+    # attribute classifer
+    if args.use_attribute_classifer:
+        model = DoubleHeadModel(model, num_labels=args.num_attributes)
+        state_dict = torch.load(args.attribute_classifier_path)
+        score_state_dict = {'score.weight': state_dict['score.weight']}
+        model.load_state_dict(score_state_dict, strict=False)
+        args.mode += '-attr_control'
+
     # selfcond
     if args.selfcond:
         args.mode += '-selfcond'
@@ -762,11 +815,8 @@ def main():
         'metric': args.metric,
         'num_units': args.num_units,
         'top_n': args.top_n,
-        'use_layers': (
-            list(expertise_df.sort_values("layer").layer.unique())
-            if expertise_df is not None and args.per_layer
-            else None
-        ),
+        'use_layers': (list(expertise_df.sort_values("layer").layer.unique())
+                       if expertise_df is not None and args.per_layer else None),
         'only_last_token': args.only_last_token,
     }
 
@@ -799,7 +849,14 @@ def main():
     elif "lexical" in args.mode:
         exp_run = lexical_generation
 
-    exp_run(model, tokenizer, data, args, model_back=model_back, device=device, outfile=outfile, **expert_kwargs)
+    exp_run(model,
+            tokenizer,
+            data,
+            args,
+            model_back=model_back,
+            device=device,
+            outfile=outfile,
+            **expert_kwargs)
 
 
 if __name__ == "__main__":

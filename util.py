@@ -9,6 +9,8 @@ import torch
 import torch.nn.functional as F
 from nltk import tokenize
 
+from attribute_classifier.attribute_classifier_model import DoubleHeadModel
+
 nltk.download('punkt')
 nltk.download('stopwords')
 
@@ -274,25 +276,40 @@ def additional_nll(logits, cur_text_ids):
     return torch.nn.CrossEntropyLoss()(logits.view(-1, logits.shape[-1]), cur_text_ids.view(-1))
 
 
-def soft_forward(model, x_onehot, y_logits, x_past=None, detach=True):
+def soft_forward(model, x_onehot, y_logits, x_past=None, detach=True, return_scorer=False, pool_method='last'):
     """
     computes logits for $y$, based on a fixed context $y$ and the current logit distribution of $y$
     :param model:
     :param x_onehot:
     :param y_logits:
+    :param return_scorer: for attribute_classifer.DoubleHeadModel, output the classification score.
+    :param pool_method: which pool method to apply over hidden states before feeding into classifier.
+        Choose from [last, mean, max].
     :return:
     """
     xy_embeds = embed_inputs(model.get_input_embeddings().weight,
                              y_logits,
                              x_onehot=x_onehot,
                              device=x_onehot.device)
-    xy_logits = model(past_key_values=x_past, inputs_embeds=xy_embeds).logits
+
+    if return_scorer:
+        assert isinstance(model, DoubleHeadModel)
+        outputs = model(past_key_values=x_past,
+                        inputs_embeds=xy_embeds,
+                        return_scorer=return_scorer,
+                        pool_method=pool_method)
+        outputs, classifier_logits = outputs
+    else:
+        outputs = model(past_key_values=x_past, inputs_embeds=xy_embeds)
+    xy_logits = outputs.logits
     x_length = x_onehot.shape[1]
     y_logits = xy_logits[:, x_length - 1:-1, :]
     if detach:
-        return y_logits.detach()
-    else:
-        return y_logits
+        y_logits = y_logits.detach()
+
+    if return_scorer:
+        return y_logits, classifier_logits
+    return y_logits
 
 
 def soft_forward_xyz(model, x_onehot, y_logits, z_onehot):

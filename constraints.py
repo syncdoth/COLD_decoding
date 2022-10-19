@@ -170,3 +170,38 @@ def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_mod
     if len(expert_loss.shape) > 1:
         expert_loss = expert_loss.mean(-1)
     return expert_loss
+
+def attr_control_constraint(model,
+                            args,
+                            y_logits_t,
+                            soft_forward_x,
+                            x_model_past,
+                            mask_t=None,
+                            z_mask=None,
+                            pool_method='last',
+                            attribute_class_idx=1):
+    """
+    y_logits_t: current optimized logit. [B, T, V]
+    soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
+    x_model_past: the past kv pairs of the LM cached from the left prompt.
+    mask_t: mask for filtering topk logits.
+    z_mask: the lexical constraint sequence (or keywords).  [V,]
+    z_onehot: the lexical constraint sequence's one-hot encoded version. [B, T, V]
+    """
+    soft_forward_y = y_logits_t / 0.001
+    if args.straight_through:
+        if mask_t is None:
+            soft_forward_y = (y_logits_t.detach() / 0.001 - y_logits_t).detach() + y_logits_t
+        else:
+            soft_forward_y = top_k_filter_3d(y_logits_t, args.topk, mask=mask_t,
+                                             extra_mask=z_mask) / 0.001
+
+    y_logits_n, classifier_logits = soft_forward(model,
+                                                soft_forward_x,
+                                                soft_forward_y,
+                                                x_past=x_model_past,
+                                                return_scorer=True,
+                                                pool_method=pool_method)
+
+    # since we want to maximize this, negative here
+    return -classifier_logits[:, attribute_class_idx]
