@@ -102,7 +102,7 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
         epoch_valid_loss = None
 
         if args.verbose:
-            logging.info(f'\nEpoch {epoch + 1}/{args.n_epochs}:\n')
+            logging.info(f'Epoch {epoch + 1}/{args.n_epochs}:\n')
             # tqdm for process (rank) 0 only when using distributed training
             train_dataloader = tqdm(dataloaders['train'])
         else:
@@ -146,7 +146,7 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
                                                              args,
                                                              device=device)
 
-            logging.info(f'\n[Train] loss: {epoch_train_loss:.4f} - acc: {epoch_train_acc:.4f} |'
+            logging.info(f'[Train] loss: {epoch_train_loss:.4f} - acc: {epoch_train_acc:.4f} |'
                          f' [Valid] loss: {epoch_valid_loss:.4f} - acc: {epoch_valid_acc:.4f}')
 
             # save model and early stopping
@@ -156,21 +156,19 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
                 best_valid_loss = epoch_valid_loss
                 # saving using process (rank) 0 only as all processes are in sync
                 save_name = os.path.join(args.checkpoint_dir, 'best.pth')
-                if not os.path.exists(args.checkpoint_dir):
-                    os.makedirs(args.checkpoint_dir, exist_ok=True)
                 torch.save(model.state_dict(), save_name)
             epoch_valid_loss = None  # reset loss
 
     if args.verbose:
         time_elapsed = time.time() - since
-        logging.info(f'\nTraining time: {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
+        logging.info(f'Training time: {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
 
         saved_name = os.path.join(args.checkpoint_dir, 'best.pth')
         model.load_state_dict(torch.load(saved_name))  # load best model
 
         test_loss, test_acc = evaluate(model, dataloaders['test'], loss_fn, args, device=device)
 
-        logging.info(f'\nBest [Valid] | epoch: {best_epoch} - loss: {best_valid_loss:.4f} '
+        logging.info(f'Best [Valid] | epoch: {best_epoch} - loss: {best_valid_loss:.4f} '
                      f'- acc: {best_valid_acc:.4f}')
         logging.info(f'[Test] loss {test_loss:.4f} - acc: {test_acc:.4f}')
 
@@ -181,6 +179,20 @@ def main():
 
     if args.seed != -1:
         set_random_seeds(args.seed)
+
+    # output dir and logging setup
+    if not os.path.exists(args.checkpoint_dir):
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+    logging.basicConfig(handlers=[
+                        logging.FileHandler(
+                            os.path.join(args.checkpoint_dir, 'train_log.log'), mode='a'),
+                        logging.StreamHandler(),
+                    ],
+                    format='%(asctime)s:%(msecs)d|%(name)s|%(levelname)s: %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S',
+                    level=logging.INFO)
+    logging.info('Start Training!')
+
     # Load pretrained model
     model = AttributeClassifier.from_pretrained(args.pretrained_model,
                                                 output_hidden_states=True,
