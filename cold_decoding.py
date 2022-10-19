@@ -789,6 +789,9 @@ def main():
         f'_lr{args.stepsize:.3f}_lrratio{args.stepsize_ratio:.2f}'
         f'_lriter{args.stepsize_iters}_{args.large_noise_iters}_{args.large_gs_std}_output.json')
 
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir, exist_ok=True)
+
     if "counterfactual" in args.mode:
         exp_run = counterfactual_reasoning
     elif "abductive" in args.mode:
