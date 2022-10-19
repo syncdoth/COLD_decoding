@@ -714,7 +714,7 @@ def main():
         set_random_seeds(args.seed)
     # Load pretrained model
     if args.selfcond:
-        cache_dir = os.path.join(os.path.expanduser('~'), '.cache/huggingface/transformers/')
+        cache_dir = os.path.join(os.path.expanduser('~'), '.cache/huggingface/hub/')
         model = PytorchTransformersModel(args.pretrained_model,
                                          cache_dir,
                                          seq_len=args.length,
