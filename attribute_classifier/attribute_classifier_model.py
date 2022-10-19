@@ -1,14 +1,49 @@
 from typing import Optional, Tuple, Union
 
 import torch
-import torch.utils.checkpoint
+from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from transformers.utils import logging
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
-from transformers import GPT2ForSequenceClassification
+from transformers import GPT2ForSequenceClassification, GPT2LMHeadModel
 
 logger = logging.get_logger(__name__)
+
+
+def pool_hidden_states(hidden_states: torch.LongTensor,
+                       batch_size: int,
+                       pad_token_id: int = None,
+                       input_ids: Optional[torch.LongTensor] = None,
+                       pool_method: str = 'last'):
+    if pad_token_id is None:
+        sequence_lengths = -1
+    else:
+        if input_ids is not None:
+            real_sequence = torch.ne(input_ids, pad_token_id)
+            sequence_lengths = real_sequence.sum(-1) - 1
+        else:
+            real_sequence = torch.ones(hidden_states.shape[:-1]).bool()
+            sequence_lengths = -1
+            logger.warning(
+                f"The model will not detect padding tokens in `inputs_embeds`. Results may be "
+                "unexpected if using padding tokens in conjunction with `inputs_embeds.`"
+            )
+    if pool_method == 'last':
+        pooled_states = hidden_states[torch.arange(batch_size, device=hidden_states.device), sequence_lengths]
+    elif pool_method in ('mean', 'max'):
+        real_hidden_states = hidden_states[real_sequence]  # [-1, E]
+        real_states_split = torch.split(real_hidden_states, (sequence_lengths + 1).tolist())  # B * [T, E]
+        if pool_method == 'mean':
+            # [B, E]
+            pooled_states = torch.stack([state.mean(0) for state in real_states_split], dim=0)
+        else:
+            pooled_states = torch.stack([state.max(0)[0] for state in real_states_split], dim=0)
+    else:
+        raise NotImplementedError(f'pool method `{pool_method}` not supported.'
+                                  f'please choose from [max, mean, last (default)].')
+
+    return pooled_states
 
 
 class AttributeClassifier(GPT2ForSequenceClassification):
@@ -17,41 +52,6 @@ class AttributeClassifier(GPT2ForSequenceClassification):
 
     added option of pooling over hidden states: max, mean, last
     """
-
-    def pool_hidden_states(self,
-                           hidden_states: torch.LongTensor,
-                           batch_size: int,
-                           input_ids: Optional[torch.LongTensor] = None,
-                           pool_method: str = 'last'):
-        if self.config.pad_token_id is None:
-            sequence_lengths = -1
-        else:
-            if input_ids is not None:
-                real_sequence = torch.ne(input_ids, self.config.pad_token_id)
-                sequence_lengths = real_sequence.sum(-1) - 1
-            else:
-                real_sequence = torch.ones(hidden_states.shape[:-1]).bool()
-                sequence_lengths = -1
-                logger.warning(
-                    f"{self.__class__.__name__} will not detect padding tokens in `inputs_embeds`. Results may be "
-                    "unexpected if using padding tokens in conjunction with `inputs_embeds.`"
-                )
-        if pool_method == 'last':
-            pooled_states = hidden_states[torch.arange(batch_size, device=hidden_states.device), sequence_lengths]
-        elif pool_method in ('mean', 'max'):
-            real_hidden_states = hidden_states[real_sequence]  # [-1, E]
-            real_states_split = torch.split(real_hidden_states, (sequence_lengths + 1).tolist())  # B * [T, E]
-            if pool_method == 'mean':
-                # [B, E]
-                pooled_states = torch.stack([state.mean(0) for state in real_states_split], dim=0)
-            else:
-                pooled_states = torch.stack([state.max(0)[0] for state in real_states_split], dim=0)
-        else:
-            raise NotImplementedError(f'pool method `{pool_method}` not supported.'
-                                      f'please choose from [max, mean, last (default)].')
-
-        return pooled_states
-
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -100,7 +100,11 @@ class AttributeClassifier(GPT2ForSequenceClassification):
             self.config.pad_token_id is not None or batch_size == 1
         ), "Cannot handle batch sizes > 1 if no padding token is defined."
 
-        pooled_states = self.pool_hidden_states(hidden_states, batch_size, input_ids=input_ids, pool_method=pool_method)
+        pooled_states = pool_hidden_states(hidden_states,
+                                           batch_size,
+                                           pad_token_id=self.config.pad_token_id,
+                                           input_ids=input_ids,
+                                           pool_method=pool_method)
         pooled_logits = self.score(pooled_states)
 
         loss = None
@@ -136,3 +140,62 @@ class AttributeClassifier(GPT2ForSequenceClassification):
             hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
         )
+
+
+class DoubleHeadModel(nn.Module):
+    def __init__(self, lm_head_model: GPT2LMHeadModel, num_labels: int = 2) -> None:
+        super().__init__()
+        self.lm_head_model = lm_head_model
+        self.score = nn.Linear(lm_head_model.config.n_embd, num_labels, bias=False)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_attention_mask: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        return_scorer: Optional[bool] = False,
+        pool_method: Optional[str] = 'last',
+    ):
+        r"""
+        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Labels for language modeling. Note that the labels **are shifted** inside the model, i.e. you can set
+            `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`
+            are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
+        """
+        output = self.lm_head_model(input_ids,
+                                    past_key_values,
+                                    attention_mask,
+                                    token_type_ids,
+                                    position_ids,
+                                    head_mask,
+                                    inputs_embeds,
+                                    encoder_hidden_states,
+                                    encoder_attention_mask,
+                                    labels,
+                                    use_cache,
+                                    output_attentions,
+                                    output_hidden_states,
+                                    return_dict)
+        if not return_scorer:
+            return output
+
+        last_hidden_states = output.hidden_states[-1]  # [B, T, E]
+        pooled_state = pool_hidden_states(last_hidden_states,
+                                          batch_size=last_hidden_states.shape[0],
+                                          pad_token_id=self.config.pad_token_id,
+                                          input_ids=input_ids,
+                                          pool_method=pool_method)
+        logits = self.score(pooled_state)
+        return output, logits
+

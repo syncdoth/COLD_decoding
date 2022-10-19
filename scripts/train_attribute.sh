@@ -3,14 +3,13 @@ python attribute_classifier/train_classifier.py \
     --pool_method max \
     --dataname sst2 \
     --num_labels 2 \
-    --n_epochs 5 \
+    --n_epochs 10 \
     --batch_size 32 \
     --max_length 64 \
-    --optimizer adam \
+    --optimizer adamw \
     --weight_decay 0.01 \
-    --lr 1e-5 \
-    --decay_steps 1 \
-    --lr_decay_rate 0.8 \
+    --lr 5e-5 \
+    --linear_scheduler \
     --seed 2022 \
     --verbose \
     --checkpoint_dir saved_models/gpt2-xl-sst2-basic-seed2022/

@@ -10,13 +10,13 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from transformers import GPT2Tokenizer
+from transformers.optimization import get_linear_schedule_with_warmup
 
 # TODO: ugly fix of importing from parent folder's util.py :(
 parent = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(parent)
 
 from util import freeze_module, set_random_seeds
-
 from attribute_classifier.attribute_classifier_model import AttributeClassifier
 from attribute_classifier.attribute_dataloader import get_attribute_dataloader
 from attribute_classifier.evaluate_classifier import evaluate
@@ -39,9 +39,10 @@ def options():
                         help="choice of pooling of LM's hidden states over the time dimension.")
 
     parser.add_argument('--n_epochs', type=int, default=10, help='number of times to train')
-    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
+    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd', 'adamw'])
     parser.add_argument('--weight_decay', type=float, default=0.01)
     parser.add_argument('--lr', type=float, default=5e-5, help='the learning rate')
+    parser.add_argument('--linear_scheduler', action='store_true')
     parser.add_argument('--decay_steps',
                         type=int,
                         default=0,
@@ -74,11 +75,18 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
                                     lr=args.lr,
                                     weight_decay=args.weight_decay,
                                     momentum=0.9)
+    elif args.optimizer == 'adamw':
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     else:
         raise NotImplementedError(f'{args.optimizer} not setup.')
 
     # lr schedulers
-    if args.decay_steps > 0:
+    if args.linear_scheduler:
+        total_steps = len(dataloaders['train']) * args.n_epochs
+        lr_decay = get_linear_schedule_with_warmup(optimizer,
+                                                   num_warmup_steps=0,
+                                                   num_training_steps=total_steps)
+    elif args.decay_steps > 0:
         lr_decay = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.lr_decay_rate)
     else:
         lr_decay = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
@@ -123,6 +131,8 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
             sample_count += labels.size(0)
             running_loss += loss.item() * labels.size(0)  # smaller batches count less
             running_acc += (yhat.argmax(-1) == labels).sum().item()  # num corrects
+            if isinstance(lr_decay, torch.optim.lr_scheduler.LambdaLR):
+                lr_decay.step()
 
         epoch_train_loss = running_loss / sample_count
         epoch_train_acc = running_acc / sample_count
@@ -130,13 +140,14 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
         # reduce lr
         if args.decay_steps > 0:
             lr_decay.step()
-        else:  # reduce on plateau, evaluate to keep track of acc in each process
+        elif not args.linear_scheduler:
+            # reduce on plateau, evaluate to keep track of acc in each process
             epoch_valid_loss, epoch_valid_acc = evaluate(model,
                                                          dataloaders['valid'],
                                                          loss_fn,
                                                          args,
                                                          device=device)
-            lr_decay.step(epoch_valid_acc[0])
+            lr_decay.step(epoch_valid_acc)
 
         if args.verbose:  # only validate using process 0
             if epoch_valid_loss is None:  # check if process 0 already validated
