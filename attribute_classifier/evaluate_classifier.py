@@ -17,11 +17,11 @@ def evaluate(model, dataloader, loss_fn, args, device='cpu'):
         inputs = inputs.to(device)
         labels = inputs.pop('labels')
 
-        yhat = model(**inputs).logits
+        yhat = model(**inputs, pool_method=args.pool_method).logits
         loss = loss_fn(yhat, labels)
 
-        sample_count += inputs.size(0)
-        running_loss += loss.item() * inputs.size(0)  # smaller batches count less
+        sample_count += labels.size(0)
+        running_loss += loss.item() * labels.size(0)  # smaller batches count less
         running_acc += (yhat.argmax(-1) == labels).sum().item()  # num corrects
 
     loss = running_loss / sample_count

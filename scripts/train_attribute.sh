@@ -1,0 +1,16 @@
+python attribute_classifier/train_classifier.py \
+    --pretrained_model gpt2-xl \
+    --pool_method max \
+    --dataname sst2 \
+    --num_labels 2 \
+    --n_epochs 5 \
+    --batch_size 32 \
+    --max_length 64 \
+    --optimizer adam \
+    --weight_decay 0.01 \
+    --lr 1e-5 \
+    --decay_steps 1 \
+    --lr_decay_rate 0.8 \
+    --seed 2022 \
+    --verbose \
+    --checkpoint_dir saved_models/gpt2-xl-sst2-basic-seed2022/

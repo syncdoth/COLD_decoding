@@ -1,15 +1,23 @@
 import argparse
 import logging
 import os
+import sys
 import time
 from typing import Dict
 
+from datasets import load_dataset
 import numpy as np
 import torch
 from tqdm import tqdm
-from transformers import GPT2ForSequenceClassification, GPT2Tokenizer
+from transformers import GPT2Tokenizer
+
+# TODO: ugly fix of importing from parent folder's util.py :(
+parent = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.append(parent)
+
 from util import freeze_module, set_random_seeds
 
+from attribute_classifier.attribute_classifier_model import AttributeClassifier
 from attribute_classifier.attribute_dataloader import get_attribute_dataloader
 from attribute_classifier.evaluate_classifier import evaluate
 
@@ -24,6 +32,11 @@ def options():
                         help="maximum length of complete sentence.")
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--dataname", type=str, default="sst2")
+    parser.add_argument("--pool_method",
+                        type=str,
+                        default='last',
+                        choices=['last', 'max', 'mean'],
+                        help="choice of pooling of LM's hidden states over the time dimension.")
 
     parser.add_argument('--n_epochs', type=int, default=10, help='number of times to train')
     parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
@@ -86,6 +99,7 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
         sample_count = 0
         running_loss = 0
         running_acc = 0
+        epoch_valid_loss = None
 
         if args.verbose:
             logging.info(f'\nEpoch {epoch + 1}/{args.n_epochs}:\n')
@@ -99,15 +113,15 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
             labels = inputs.pop('labels')
 
             optimizer.zero_grad()
-            yhat = model(**inputs).logits
+            yhat = model(**inputs, pool_method=args.pool_method).logits
 
             loss = loss_fn(yhat, labels)
             loss.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimizer.step()
 
-            sample_count += inputs.size(0)
-            running_loss += loss.item() * inputs.size(0)  # smaller batches count less
+            sample_count += labels.size(0)
+            running_loss += loss.item() * labels.size(0)  # smaller batches count less
             running_acc += (yhat.argmax(-1) == labels).sum().item()  # num corrects
 
         epoch_train_loss = running_loss / sample_count
@@ -142,6 +156,8 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
                 best_valid_loss = epoch_valid_loss
                 # saving using process (rank) 0 only as all processes are in sync
                 save_name = os.path.join(args.checkpoint_dir, 'best.pth')
+                if not os.path.exists(args.checkpoint_dir):
+                    os.makedirs(args.checkpoint_dir, exist_ok=True)
                 torch.save(model.state_dict(), save_name)
             epoch_valid_loss = None  # reset loss
 
@@ -161,43 +177,46 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
 
 def main():
     args = options()
-    device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if args.seed != -1:
         set_random_seeds(args.seed)
     # Load pretrained model
-    model = GPT2ForSequenceClassification.from_pretrained(args.pretrained_model,
-                                                          output_hidden_states=True,
-                                                          resid_pdrop=0,
-                                                          embd_pdrop=0,
-                                                          attn_pdrop=0,
-                                                          summary_first_dropout=0)
+    model = AttributeClassifier.from_pretrained(args.pretrained_model,
+                                                output_hidden_states=True,
+                                                resid_pdrop=0,
+                                                embd_pdrop=0,
+                                                attn_pdrop=0,
+                                                summary_first_dropout=0)
     model.to(device)
     # Freeze GPT-2 weights; only train the classifer on top
     freeze_module(model.transformer)
 
     # Load tokenizer
     tokenizer = GPT2Tokenizer.from_pretrained(args.pretrained_model)
+    model.config.pad_token_id = model.config.eos_token_id
+    tokenizer.pad_token = tokenizer.eos_token
 
     # Load data
-    train_loader = get_attribute_dataloader(args.dataname,
+    data = load_dataset(args.dataname)
+    train_loader = get_attribute_dataloader(data,
                                             tokenizer,
                                             max_length=args.max_length,
                                             batch_size=args.batch_size,
                                             split='train',
-                                            num_workers=None)
-    valid_loader = get_attribute_dataloader(args.dataname,
+                                            num_workers=0)
+    valid_loader = get_attribute_dataloader(data,
                                             tokenizer,
                                             max_length=args.max_length,
                                             batch_size=args.batch_size,
                                             split='validation',
-                                            num_workers=None)
-    test_loader = get_attribute_dataloader(args.dataname,
+                                            num_workers=0)
+    test_loader = get_attribute_dataloader(data,
                                            tokenizer,
                                            max_length=args.max_length,
                                            batch_size=args.batch_size,
                                            split='test',
-                                           num_workers=None)
+                                           num_workers=0)
 
     dataloaders = {'train': train_loader, 'valid': valid_loader, 'test': test_loader}
 
