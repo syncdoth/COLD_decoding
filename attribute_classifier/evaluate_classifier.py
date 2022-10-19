@@ -13,11 +13,11 @@ def evaluate(model, dataloader, loss_fn, args, device='cpu'):
     running_loss = 0
     running_acc = 0
 
-    for inputs, labels in dataloader:
-        inputs = inputs.float().to(device)
-        labels = labels.long().to(device)
+    for inputs in dataloader:
+        inputs = inputs.to(device)
+        labels = inputs.pop('labels')
 
-        yhat = model(inputs).logits
+        yhat = model(**inputs).logits
         loss = loss_fn(yhat, labels)
 
         sample_count += inputs.size(0)

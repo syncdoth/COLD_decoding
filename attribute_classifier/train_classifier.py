@@ -23,7 +23,7 @@ def options():
                         default=50,
                         help="maximum length of complete sentence.")
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--data_path", type=str, default="")
+    parser.add_argument("--dataname", type=str, default="sst2")
 
     parser.add_argument('--n_epochs', type=int, default=10, help='number of times to train')
     parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
@@ -94,12 +94,12 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
         else:
             train_dataloader = dataloaders['train']
 
-        for i, (inputs, labels) in enumerate(train_dataloader):
-            inputs = inputs.float().to(device)
-            labels = labels.to(device)
+        for i, inputs in enumerate(train_dataloader):
+            inputs = inputs.to(device)
+            labels = inputs.pop('labels')
 
             optimizer.zero_grad()
-            yhat = model(inputs)
+            yhat = model(**inputs).logits
 
             loss = loss_fn(yhat, labels)
             loss.backward()
@@ -180,23 +180,23 @@ def main():
     tokenizer = GPT2Tokenizer.from_pretrained(args.pretrained_model)
 
     # Load data
-    train_loader = get_attribute_dataloader(args.data_path,
+    train_loader = get_attribute_dataloader(args.dataname,
                                             tokenizer,
                                             max_length=args.max_length,
                                             batch_size=args.batch_size,
-                                            is_train=True,
+                                            split='train',
                                             num_workers=None)
-    valid_loader = get_attribute_dataloader(args.data_path,
+    valid_loader = get_attribute_dataloader(args.dataname,
                                             tokenizer,
                                             max_length=args.max_length,
                                             batch_size=args.batch_size,
-                                            is_train=False,
+                                            split='validation',
                                             num_workers=None)
-    test_loader = get_attribute_dataloader(args.data_path,
+    test_loader = get_attribute_dataloader(args.dataname,
                                            tokenizer,
                                            max_length=args.max_length,
                                            batch_size=args.batch_size,
-                                           is_train=False,
+                                           split='test',
                                            num_workers=None)
 
     dataloaders = {'train': train_loader, 'valid': valid_loader, 'test': test_loader}

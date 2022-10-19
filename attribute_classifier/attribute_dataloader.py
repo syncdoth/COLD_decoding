@@ -1,29 +1,35 @@
 from torch.utils.data import DataLoader, Dataset
+from datasets import load_dataset
 
 
-def get_attribute_dataloader(datapath,
+def get_attribute_dataloader(dataname,
                              tokenizer,
                              max_length: int = 256,
                              batch_size: int = 32,
-                             is_train: bool = False,
+                             split: str = 'test',
                              num_workers: int = None):
-    dataset = AttributeDataset(datapath, tokenizer, max_length=max_length)
+    dataset = AttributeDataset(dataname, tokenizer, max_length=max_length, split=split)
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=is_train,
+        shuffle=split == 'train',
         num_workers=num_workers,
     )
 
 
 class AttributeDataset(Dataset):
 
-    def __init__(self, datapath: str, tokenizer, max_length: int = 256) -> None:
-        data = load(datapath)  # TODO
+    def __init__(self,
+                 dataname: str,
+                 tokenizer,
+                 max_length: int = 256,
+                 split: str = 'test') -> None:
+        data = load_dataset(dataname)
+        data = data[split]
 
-        self.labels = data['labels']
-        self.texts = tokenizer(data['texts'],
-                               return_tensors=True,
+        self.labels = data['label']
+        self.texts = tokenizer(data['sentence'],
+                               return_tensors='pt',
                                padding='max_length',
                                truncation=True,
                                max_length=max_length)
