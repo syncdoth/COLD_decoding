@@ -134,3 +134,6 @@ play.ipynb
 # ignore output generations folder
 outputs/
 saved_models/
+
+# wandb logs
+wandb/

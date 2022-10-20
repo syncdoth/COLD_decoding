@@ -55,6 +55,7 @@ def options():
                         type=str,
                         default="./data/lexical/commongen_data/test.multi.constraint.json")
     parser.add_argument("--output-dir", type=str, default="./data/commongen/")
+    parser.add_argument("--output-filename", type=str)
     parser.add_argument("--use-back-model", action='store_true')
     parser.add_argument("--back-model", type=str, default="danyaljj/opengpt2_pytorch_backward")
     parser.add_argument("--version", type=str, default="")
@@ -68,7 +69,8 @@ def options():
         "--mode",
         type=str,
         default='constrained_langevin',
-        choices=['lexical_generation', 'counterfactual_langevin', 'abductive_langevin', 'grammar'])
+        choices=['lexical_generation', 'counterfactual_langevin', 'abductive_langevin', 'grammar',
+                 'prompted_generation'])
     ## model
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--length",
@@ -214,6 +216,9 @@ def options():
     parser.add_argument("--attr_cls_idx",
                         type=int,
                         help="the index of the desired attribute we want to control.")
+    parser.add_argument("--prompt",
+                        type=str,
+                        help="the prompt to use in prompted_generation case.")
 
 
     args = parser.parse_args()
@@ -274,18 +279,31 @@ def decode(model,
     x_encoded = x_encoded.unsqueeze(0).repeat(args.batch_size, 1)  # [B, T]
     x_onehot = one_hot(x_encoded, dimension=tokenizer.vocab_size)  # [B, T, V]
 
-    assert sent_constraint is not None  # TODO: make this possible
-    # delete the "." token we appended before
-    z_encoded = torch.tensor(tokenizer.encode(sent_constraint)[1:], dtype=torch.long)
-    z_encoded = z_encoded.unsqueeze(0).repeat(args.batch_size, 1)  # [B, T]
-    z_onehot = one_hot(z_encoded, dimension=tokenizer.vocab_size)  # [B, T, V]
+    if sent_constraint is not None:
+        # delete the "." token we appended before
+        z_encoded = torch.tensor(tokenizer.encode(sent_constraint)[1:], dtype=torch.long)
+        z_encoded = z_encoded.unsqueeze(0).repeat(args.batch_size, 1)  # [B, T]
+        z_onehot = one_hot(z_encoded, dimension=tokenizer.vocab_size)  # [B, T, V]
+    else:
+        z_encoded = z_onehot = None
 
     length = args.length
     if length <= 0:
+        assert z_encoded is not None, "length <=0 requires `sent_constraint` not to be None."
         length = z_encoded.shape[1] - length
 
     # obtain z_mask
-    if keyword_constraint is None:
+    if keyword_constraint is not None:
+        keywords_encoded = torch.tensor(tokenizer.encode(keyword_constraint), dtype=torch.long)
+        z_mask = np.zeros([tokenizer.vocab_size])
+        z_mask[keywords_encoded] = 1.
+        z_mask = torch.tensor(z_mask)
+
+        # [B, T, V]
+        z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
+        # [B, K]
+        keywords_encoded = keywords_encoded.unsqueeze(0).repeat(args.batch_size, 1)
+    elif sent_constraint is not None:
         # NOTE: if no lexical (~keyword based) constraints, obtain keyword from main constraint
         z_words = word_tokenize(sent_constraint[2:])  # delete the ". " token we appended before
         z_nonstop_words = [
@@ -302,22 +320,14 @@ def decode(model,
         # [B, T, V]
         z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
     else:
-        keywords_encoded = torch.tensor(tokenizer.encode(keyword_constraint), dtype=torch.long)
-        z_mask = np.zeros([tokenizer.vocab_size])
-        z_mask[keywords_encoded] = 1.
-        z_mask = torch.tensor(z_mask)
-
-        # [B, T, V]
-        z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
-        # [B, K]
-        keywords_encoded = keywords_encoded.unsqueeze(0).repeat(args.batch_size, 1)
+        z_mask = None
 
     # device management
     x_encoded = x_encoded.to(device)
     x_onehot = x_onehot.to(device)
-    z_encoded = z_encoded.to(device)
-    z_onehot = z_onehot.to(device)
-    z_mask = z_mask.to(device)
+    z_encoded = z_encoded.to(device) if z_encoded is not None else z_encoded
+    z_onehot = z_onehot.to(device) if z_onehot is not None else z_onehot
+    z_mask = z_mask.to(device) if z_mask is not None else z_mask
     if keyword_constraint is not None:
         keywords_encoded = keywords_encoded.to(device)
 
@@ -331,6 +341,7 @@ def decode(model,
     if args.init_mode == 'random':
         init_logits = initialize(model, x_encoded, length, args.init_temp, device)
     else:
+        assert z_onehot is not None
         init_logits = z_onehot / 0.1
         init_logits = init_logits[:, :length, :]
         if length > init_logits.shape[1]:
@@ -341,11 +352,14 @@ def decode(model,
             ],
                                     dim=1)
     text, _, _ = get_text_from_logits(init_logits, tokenizer)
-    for text_i in range(text):
+    for text_i in text:
         print(f"[initial]: {text_i}")
 
     if args.wandb:
-        wandb.init(project=f'{args.mode}-{round(time.time() * 1000)}', config=args)
+        experiment = wandb.init(project='COLD Decoding',
+                                resume='allow',
+                                name=f'{args.mode}-{round(time.time() * 1000)}',
+                                config=args)
 
     assert args.prefix_length <= 0  # Otherwise not compatible with batch mode
 
@@ -478,14 +492,15 @@ def decode(model,
                       f"lr: {last_lr:.4f}, |{text[bi]}|")
 
         if args.wandb:
-            wandb.log({
+            log_items = {
                 "Loss": loss.item(),
-                "fluency loss": fluency_loss.item(),
-                "constraint loss": c_loss,
+                'fluency loss': {f'gen-{i + 1}': v.item() for i, v in enumerate(fluency_loss)},
+                'constraint loss': {f'gen-{i + 1}': v.item() for i, v in enumerate(c_loss)},
                 "Gassian_Noise_STD": noise_std,
                 "LR": last_lr,
                 "Gradient": torch.norm(epsilon.grad).detach().clone().data.cpu().numpy()
-            })
+            }
+            experiment.log(log_items)
 
         ## noise
         if it < args.num_iters - 1:
@@ -751,6 +766,44 @@ def lexical_generation(model,
     print(f"outputs: {outfile}")
 
 
+def prompted_generation(model,
+                       tokenizer,
+                       prompt,
+                       args,
+                       device='cpu',
+                       outfile='output.json',
+                       **expert_kwargs):
+    fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
+
+    text_candidates = []
+    text_complete_candidates = []
+    constraint_fns = ('attr_control',) if args.use_attribute_classifer else tuple()
+    for _ in range(args.repeat_batch):
+        ppl_last, text, text_post = decode(model,
+                                            tokenizer,
+                                            args,
+                                            prompt=prompt,
+                                            sent_constraint=None,
+                                            keyword_constraint=None,
+                                            constraint_functions=constraint_fns,
+                                            device=device,
+                                            **expert_kwargs)
+        text_candidates.extend(text)
+        text_complete_candidates.extend(text_post)
+
+    out = {
+        'prompt': prompt,
+        'generation': text_candidates,
+        'generation_complete': text_complete_candidates,
+    }
+    print(out)
+
+    fw_pretty.write(json.dumps(out, indent=4) + '\n')
+    fw_pretty.flush()
+
+    print(f"outputs: {outfile}")
+
+
 def main():
     args = options()
     device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
@@ -767,6 +820,20 @@ def main():
         model.module.eval()
         # Freeze PTLM weights
         freeze_module(model.module)
+    elif args.use_attribute_classifer:
+        model = DoubleHeadModel.from_pretrained(args.pretrained_model,
+                                                output_hidden_states=True,
+                                                resid_pdrop=0,
+                                                embd_pdrop=0,
+                                                attn_pdrop=0,
+                                                summary_first_dropout=0,
+                                                num_labels=args.num_attributes)
+        model.score.load_state_dict(torch.load(args.attribute_classifier_path))
+        model.to(device)
+        model.eval()
+        # Freeze GPT-2 weights
+        freeze_module(model)
+        args.mode += '-attr_control'
     else:
         model = GPT2LMHeadModel.from_pretrained(args.pretrained_model,
                                                 output_hidden_states=True,
@@ -795,12 +862,6 @@ def main():
     else:
         model_back = None
 
-    # attribute classifer
-    if args.use_attribute_classifer:
-        model = DoubleHeadModel(model, num_labels=args.num_attributes)
-        model.score.load_state_dict(torch.load(args.attribute_classifier_path))
-        args.mode += '-attr_control'
-
     # selfcond
     if args.selfcond:
         args.mode += '-selfcond'
@@ -819,23 +880,28 @@ def main():
     }
 
     # Load data
-    with open(args.input_file, 'r', encoding='utf-8') as fr:
-        if args.input_file.endswith('.json'):
-            data = [json.loads(l.strip()) for l in fr.readlines()]
-        else:
-            raise NotImplementedError
+    if not os.path.exists(args.input_file):
+        print(f'[WARNING]: file {args.input_file} do not exist. Using --prompt.')
+        assert args.prompt, "either --input_file or --prompt must be set."
+    else:
+        with open(args.input_file, 'r', encoding='utf-8') as fr:
+            if args.input_file.endswith('.json') or args.input_file.endswith('.jsonl'):
+                data = [json.loads(l.strip()) for l in fr.readlines()]
+            else:
+                raise NotImplementedError("non json files are not supported yet!")
 
     # output file
     loss_rerank = 'norerank' if args.no_loss_rerank else 'rerank'
-    outfile = (
-        f'{args.version}_seed{args.seed}_{args.start}_{args.end}_{args.mode}'
-        f'_cw{args.constraint_weight:.3f}_kwc{args.keyword_weight:.3f}'
-        f'_{loss_rerank}_ngram{args.counterfactual_max_ngram}'
-        f'_lrnllp{args.lr_nll_portion:.3f}_len{args.length}_topk{args.topk}'
-        f'_niter{args.num_iters}_frozlen{args.frozen_length}'
-        f'_winiter{args.win_anneal_iters}_noiseiter{args.noise_iters}_gsstd{args.gs_std:.4f}'
-        f'_lr{args.stepsize:.3f}_lrratio{args.stepsize_ratio:.2f}'
-        f'_lriter{args.stepsize_iters}_{args.large_noise_iters}_{args.large_gs_std}_output.json')
+    if not args.output_filename:
+        args.output_filename = (
+            f'{args.version}_seed{args.seed}_{args.start}_{args.end}_{args.mode}'
+            f'_cw{args.constraint_weight:.3f}_kwc{args.keyword_weight:.3f}'
+            f'_{loss_rerank}_ngram{args.counterfactual_max_ngram}'
+            f'_lrnllp{args.lr_nll_portion:.3f}_len{args.length}_topk{args.topk}'
+            f'_niter{args.num_iters}_frozlen{args.frozen_length}'
+            f'_winiter{args.win_anneal_iters}_noiseiter{args.noise_iters}_gsstd{args.gs_std:.4f}'
+            f'_lr{args.stepsize:.3f}_lrratio{args.stepsize_ratio:.2f}'
+            f'_lriter{args.stepsize_iters}_{args.large_noise_iters}_{args.large_gs_std}_output.json')
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)
@@ -846,6 +912,10 @@ def main():
         exp_run = abductive_reasoning
     elif "lexical" in args.mode:
         exp_run = lexical_generation
+    else:
+        assert args.prompt, "--prompt must be set"
+        exp_run = prompted_generation
+        data = args.prompt
 
     exp_run(model,
             tokenizer,
@@ -853,7 +923,7 @@ def main():
             args,
             model_back=model_back,
             device=device,
-            outfile=outfile,
+            outfile=args.output_filename,
             **expert_kwargs)
 
 

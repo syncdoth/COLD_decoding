@@ -23,7 +23,6 @@ def pool_hidden_states(hidden_states: torch.LongTensor,
             real_sequence = torch.ne(input_ids, pad_token_id)
             sequence_lengths = real_sequence.sum(-1) - 1
         else:
-            real_sequence = torch.ones(hidden_states.shape[:-1]).bool()
             sequence_lengths = -1
             logger.warning(
                 f"The model will not detect padding tokens in `inputs_embeds`. Results may be "
@@ -32,6 +31,11 @@ def pool_hidden_states(hidden_states: torch.LongTensor,
     if pool_method == 'last':
         pooled_states = hidden_states[torch.arange(batch_size, device=hidden_states.device), sequence_lengths]
     elif pool_method in ('mean', 'max'):
+        if isinstance(sequence_lengths, int):
+            if pool_method == 'mean':
+                return hidden_states.mean(1)
+            return hidden_states.max(1)[0]
+
         real_hidden_states = hidden_states[real_sequence]  # [-1, E]
         real_states_split = torch.split(real_hidden_states, (sequence_lengths + 1).tolist())  # B * [T, E]
         if pool_method == 'mean':
@@ -142,11 +146,11 @@ class AttributeClassifier(GPT2ForSequenceClassification):
         )
 
 
-class DoubleHeadModel(nn.Module):
-    def __init__(self, lm_head_model: GPT2LMHeadModel, num_labels: int = 2) -> None:
-        super().__init__()
-        self.lm_head_model = lm_head_model
-        self.score = nn.Linear(lm_head_model.config.n_embd, num_labels, bias=False)
+class DoubleHeadModel(GPT2LMHeadModel):
+
+    def __init__(self, config, num_labels: int = 2) -> None:
+        super().__init__(config)
+        self.score = nn.Linear(config.n_embd, num_labels, bias=False)
 
     def forward(
         self,
@@ -173,20 +177,20 @@ class DoubleHeadModel(nn.Module):
             `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`
             are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
         """
-        output = self.lm_head_model(input_ids,
-                                    past_key_values,
-                                    attention_mask,
-                                    token_type_ids,
-                                    position_ids,
-                                    head_mask,
-                                    inputs_embeds,
-                                    encoder_hidden_states,
-                                    encoder_attention_mask,
-                                    labels,
-                                    use_cache,
-                                    output_attentions,
-                                    output_hidden_states,
-                                    return_dict)
+        output = super().forward(input_ids,
+                                 past_key_values,
+                                 attention_mask,
+                                 token_type_ids,
+                                 position_ids,
+                                 head_mask,
+                                 inputs_embeds,
+                                 encoder_hidden_states,
+                                 encoder_attention_mask,
+                                 labels,
+                                 use_cache,
+                                 output_attentions,
+                                 output_hidden_states,
+                                 return_dict)
         if not return_scorer:
             return output
 
