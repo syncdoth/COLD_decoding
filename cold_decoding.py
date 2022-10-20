@@ -364,7 +364,6 @@ def decode(model,
         if not args.wandb_runname:
             args.wandb_runname = f'{args.mode}-{round(time.time() * 1000)}'
         experiment = wandb.init(project='COLD Decoding',
-                                resume='allow',
                                 name=args.wandb_runname,
                                 config=args)
 
