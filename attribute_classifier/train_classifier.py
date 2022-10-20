@@ -175,7 +175,7 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
         logging.info(f'Training time: {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
 
         saved_name = os.path.join(args.checkpoint_dir, 'best.pth')
-        model.load_state_dict(torch.load(saved_name))  # load best model
+        model.score.load_state_dict(torch.load(saved_name))  # load best model
 
         test_loss, test_acc = evaluate(model, dataloaders['test'], loss_fn, args, device=device)
 

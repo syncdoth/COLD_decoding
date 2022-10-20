@@ -798,9 +798,7 @@ def main():
     # attribute classifer
     if args.use_attribute_classifer:
         model = DoubleHeadModel(model, num_labels=args.num_attributes)
-        state_dict = torch.load(args.attribute_classifier_path)
-        score_state_dict = {'score.weight': state_dict['score.weight']}
-        model.load_state_dict(score_state_dict, strict=False)
+        model.score.load_state_dict(torch.load(args.attribute_classifier_path))
         args.mode += '-attr_control'
 
     # selfcond
