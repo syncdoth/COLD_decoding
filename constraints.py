@@ -205,4 +205,4 @@ def attr_control_constraint(model,
 
     classifier_probs = torch.softmax(classifier_logits, dim=-1)
     # since we want to maximize this, negative here
-    return -classifier_probs[:, attribute_class_idx]
+    return 1 - classifier_probs[:, attribute_class_idx]
