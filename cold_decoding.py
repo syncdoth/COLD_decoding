@@ -147,6 +147,10 @@ def options():
                         type=int,
                         default=1000,
                         help="add one more group of constraints from N iters")
+    parser.add_argument("--grad_clip",
+                        type=float,
+                        default=0,
+                        help="gradient clipping value. 0 means turn off")
     # gaussian noise
     parser.add_argument("--gs_mean", type=float, default=0.0)
     parser.add_argument("--gs_std", type=float, default=0.01)
@@ -475,6 +479,8 @@ def decode(model,
 
         if it < args.num_iters - 1:  # so that the mask_t at the last iteration will not change
             loss.backward()
+            if args.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_([epsilon], args.grad_clip)
             optim.step()
             scheduler.step()  # turn off the scheduler
             last_lr = scheduler.get_last_lr()[0]
