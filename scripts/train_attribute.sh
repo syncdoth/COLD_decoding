@@ -1,6 +1,6 @@
 python attribute_classifier/train_classifier.py \
     --pretrained_model gpt2-xl \
-    --pool_method max \
+    --pool_method last \
     --dataname sst2 \
     --num_labels 2 \
     --n_epochs 10 \
@@ -12,4 +12,4 @@ python attribute_classifier/train_classifier.py \
     --linear_scheduler \
     --seed 2022 \
     --verbose \
-    --checkpoint_dir saved_models/gpt2-xl-sst2-basic-seed2022/
+    --checkpoint_dir saved_models/gpt2-xl-sst2-pool_last-seed2022/

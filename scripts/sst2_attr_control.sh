@@ -35,9 +35,9 @@ function control_gen() {
 		--output-dir './outputs/attr_control/' \
 		--output-filename '${exp_name}.json' \
 		--use_attribute_classifer \
-		--attribute_classifier_path saved_models/gpt2-xl-sst2-basic-seed2022/best.pth \
+		--attribute_classifier_path saved_models/gpt2-xl-sst2-pool_last-seed2022/best.pth \
 		--num_attributes 2 \
-		--pool_method max \
+		--pool_method last \
 		--attr_cls_idx $class_idx \
 		--prompt '$prompt' \
 		--wandb \
@@ -46,8 +46,8 @@ function control_gen() {
 }
 for cw in 0.2 0.4 0.5 0.8 1.0; do
 	# positive
-	control_gen "The food at the restaurant was" "gpt2-xl-ctrl_sst2_pos-pool_max-cw$cw" 1 $cw &
+	control_gen "The food at the restaurant was" "gpt2-xl-ctrl_sst2_pos-pool_last-cw$cw" 1 $cw 
 
 	# negative
-	control_gen "The food at the restaurant was" "gpt2-xl-ctrl_sst2_neg-pool_max-cw$cw" 0 $cw
+	control_gen "The food at the restaurant was" "gpt2-xl-ctrl_sst2_neg-pool_last-cw$cw" 0 $cw
 done
