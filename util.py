@@ -801,3 +801,6 @@ def get_keywords(z, x, args):
         ret_words = [w for w in ret_words if w not in x_words]
 
     return ' '.join(ret_words)
+
+def to_device(device, *tensors):
+    return (ten.to(device) if ten is not None else None for ten in tensors)

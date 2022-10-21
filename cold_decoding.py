@@ -8,11 +8,9 @@ import time
 
 import nltk
 import numpy as np
-import torch
 import pandas as pd
+import torch
 import wandb
-
-from selfcond.generation import force_units_hooks
 
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -21,19 +19,19 @@ nltk.download('averaged_perceptron_tagger')
 from nltk import tokenize
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from selfcond.expertise import get_expert_reference
+from selfcond.generation import force_units_hooks
+from selfcond.models import PytorchTransformersModel
 from torch import nn
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
+from attribute_classifier.attribute_classifier_model import DoubleHeadModel
 from constraints import (attr_control_constraint, expert_activation_constraint, fluency_constraint,
                          keyword_lexical_constraint, right_context_pred_constraint,
                          sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
                   initialize, one_hot, post_process, post_sent, rank_and_filter, set_random_seeds,
-                  top_k_filter_3d)
-
-from attribute_classifier.attribute_classifier_model import DoubleHeadModel
-from selfcond.models import PytorchTransformersModel
-from selfcond.expertise import get_expert_reference
+                  to_device, top_k_filter_3d)
 
 stop_words = set(stopwords.words('english'))
 
@@ -323,16 +321,13 @@ def decode(model,
         # [B, T, V]
         z_mask = z_mask.unsqueeze(0).unsqueeze(0).repeat(args.batch_size, length, 1)
     else:
+        keywords_encoded = None
         z_mask = None
 
     # device management
-    x_encoded = x_encoded.to(device)
-    x_onehot = x_onehot.to(device)
-    z_encoded = z_encoded.to(device) if z_encoded is not None else z_encoded
-    z_onehot = z_onehot.to(device) if z_onehot is not None else z_onehot
-    z_mask = z_mask.to(device) if z_mask is not None else z_mask
-    if keyword_constraint is not None:
-        keywords_encoded = keywords_encoded.to(device)
+    (x_encoded, x_onehot, z_encoded, z_onehot, z_mask,
+     keywords_encoded) = to_device(device, x_encoded, x_onehot, z_encoded, z_onehot, z_mask,
+                                   keywords_encoded)
 
     if args.verbose:
         print(f"prompt:\t|{prompt}|\n"
@@ -343,8 +338,9 @@ def decode(model,
     # init logits distribution
     if args.init_mode == 'random':
         init_logits = initialize(model, x_encoded, length, args.init_temp, device)
-    else:
-        assert z_onehot is not None
+    elif args.init_mode == 'original':
+        assert z_onehot is not None, ("--init-mode original means to use original"
+                                      " reference; sent_constraint required.")
         init_logits = z_onehot / 0.1
         init_logits = init_logits[:, :length, :]
         if length > init_logits.shape[1]:
@@ -389,9 +385,9 @@ def decode(model,
 
     noise_std = 0.0
 
-    ## Encode x beforehand
+    ## Encode x (prompt) beforehand
     assert args.prefix_length <= 0, "The current code does not support prefix-length > 0"
-    # The last token of x is used in soft_forward; [B, 1, V]
+    # The last token of x (prompt) is used in soft_forward; [B, 1, V]
     soft_forward_x = x_onehot[:, -1:, :]
     if x_encoded.shape[1] == 1:
         x_model_past = None
@@ -401,7 +397,7 @@ def decode(model,
         x_model_past = [(p[0].detach(), p[1].detach()) if isinstance(p, tuple) else p.detach()
                         for p in x_model_past]
 
-    mask_t = None
+    mask_t = None  # NOTE: mask_t is the top-k logit mask of the base LM.
 
     for it in range(args.num_iters):
         optim.zero_grad()
@@ -419,8 +415,6 @@ def decode(model,
             z_onehot=z_onehot,
         )
 
-        c_loss = 0
-
         # n-gram similarity constraint
         constraint_loss = {}
         if "sentence_ngram" in constraint_functions and args.sentence_ngram_weight > 0:
@@ -428,6 +422,7 @@ def decode(model,
                                                 args.topk,
                                                 mask=mask_t,
                                                 extra_mask=z_mask)
+            # right-context n-gram similarity constraint
             sent_ngram_loss = sentence_ngram_similarity_constraint(
                 filtered_y_logits, z_encoded, max_ngram=args.counterfactual_max_ngram)
             constraint_loss["sentence_ngram"] = sent_ngram_loss * args.sentence_ngram_weight
@@ -439,8 +434,8 @@ def decode(model,
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
         if "keyword" in constraint_functions and args.keyword_weight > 0:
-            # right-context n-gram similarity constraint
-            kw_loss = keyword_lexical_constraint(y_logits, keywords_encoded)
+            # keyword similarity (inclusion; 1-gram based bleu) constraint
+            kw_loss = keyword_lexical_constraint(y_logits_t, keywords_encoded)
             constraint_loss["keyword"] = kw_loss * args.keyword_weight
 
         if "attr_control" in constraint_functions and args.attr_control_weight > 0:
