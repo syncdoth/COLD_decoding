@@ -47,6 +47,7 @@ def options():
     parser.add_argument("--print-every", type=int, default=200)
     parser.add_argument("--pretrained_model", type=str, default="gpt2-large")
     parser.add_argument("--wandb", action="store_true")
+    parser.add_argument("--wandb-project", type=str, default="COLD Decoding", help='runname for wandb')
     parser.add_argument("--wandb-runname", type=str, help='runname for wandb')
     parser.add_argument("--straight-through", action="store_true")  # TODO: meaning?
     parser.add_argument("--topk", type=int, default=0)
@@ -361,7 +362,7 @@ def decode(model,
     if args.wandb:
         if not args.wandb_runname:
             args.wandb_runname = f'{args.mode}-{round(time.time() * 1000)}'
-        experiment = wandb.init(project='COLD Decoding',
+        experiment = wandb.init(project=args.wandb_project,
                                 name=args.wandb_runname,
                                 config=args)
 
