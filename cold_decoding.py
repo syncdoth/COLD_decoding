@@ -65,12 +65,13 @@ def options():
                         type=int,
                         default=1,
                         help="loading data util ith examples.")
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default='constrained_langevin',
-        choices=['lexical_generation', 'counterfactual_langevin', 'abductive_langevin', 'grammar',
-                 'prompted_generation'])
+    parser.add_argument("--mode",
+                        type=str,
+                        default='constrained_langevin',
+                        choices=[
+                            'lexical_generation', 'counterfactual_langevin', 'abductive_langevin',
+                            'grammar', 'prompted_generation'
+                        ])
     ## model
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--length",
@@ -216,10 +217,7 @@ def options():
     parser.add_argument("--attr_cls_idx",
                         type=int,
                         help="the index of the desired attribute we want to control.")
-    parser.add_argument("--prompt",
-                        type=str,
-                        help="the prompt to use in prompted_generation case.")
-
+    parser.add_argument("--prompt", type=str, help="the prompt to use in prompted_generation case.")
 
     args = parser.parse_args()
     return args
@@ -767,12 +765,12 @@ def lexical_generation(model,
 
 
 def prompted_generation(model,
-                       tokenizer,
-                       prompt,
-                       args,
-                       device='cpu',
-                       outfile='output.json',
-                       **expert_kwargs):
+                        tokenizer,
+                        prompt,
+                        args,
+                        device='cpu',
+                        outfile='output.json',
+                        **expert_kwargs):
     fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
 
     text_candidates = []
@@ -780,14 +778,14 @@ def prompted_generation(model,
     constraint_fns = ('attr_control',) if args.use_attribute_classifer else tuple()
     for _ in range(args.repeat_batch):
         ppl_last, text, text_post = decode(model,
-                                            tokenizer,
-                                            args,
-                                            prompt=prompt,
-                                            sent_constraint=None,
-                                            keyword_constraint=None,
-                                            constraint_functions=constraint_fns,
-                                            device=device,
-                                            **expert_kwargs)
+                                           tokenizer,
+                                           args,
+                                           prompt=prompt,
+                                           sent_constraint=None,
+                                           keyword_constraint=None,
+                                           constraint_functions=constraint_fns,
+                                           device=device,
+                                           **expert_kwargs)
         text_candidates.extend(text)
         text_complete_candidates.extend(text_post)
 
@@ -901,7 +899,8 @@ def main():
             f'_niter{args.num_iters}_frozlen{args.frozen_length}'
             f'_winiter{args.win_anneal_iters}_noiseiter{args.noise_iters}_gsstd{args.gs_std:.4f}'
             f'_lr{args.stepsize:.3f}_lrratio{args.stepsize_ratio:.2f}'
-            f'_lriter{args.stepsize_iters}_{args.large_noise_iters}_{args.large_gs_std}_output.json')
+            f'_lriter{args.stepsize_iters}_{args.large_noise_iters}_{args.large_gs_std}_output.json'
+        )
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)

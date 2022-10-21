@@ -4,7 +4,6 @@ from torch.utils.data import DataLoader, Dataset
 from transformers.tokenization_utils_base import BatchEncoding
 
 
-
 def get_attribute_dataloader(dataname_or_data,
                              tokenizer,
                              max_length: int = 256,
@@ -45,7 +44,9 @@ class AttributeDataset(Dataset):
             print(f'[split]: {split}')
             lengths = [len(tokenizer.tokenize(x)) for x in data['sentence']]
             print('text length stats:')
-            print(f'max: {max(lengths)}, mean: {mean(lengths)}, min: {min(lengths)}, median: {median(lengths)}')
+            print(
+                f'max: {max(lengths)}, mean: {mean(lengths)}, min: {min(lengths)}, median: {median(lengths)}'
+            )
 
     def __len__(self):
         return len(self.labels)

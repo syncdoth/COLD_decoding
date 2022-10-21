@@ -123,26 +123,33 @@ def sentence_ngram_similarity_constraint(y_logits_t, target_sent_id, max_ngram=4
     return ngram_sim
 
 
-def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_model_past,
-                                 expert_per_layer, args,
-                                 only_last_token=False, mask_t=None, z_mask=None):
+def expert_activation_constraint(model_wrapper,
+                                 soft_forward_x,
+                                 y_logits_,
+                                 x_model_past,
+                                 expert_per_layer,
+                                 args,
+                                 only_last_token=False,
+                                 mask_t=None,
+                                 z_mask=None):
     # get response of all expert neurons
     soft_forward_y = y_logits_ / 0.001
     if args.straight_through:
         if mask_t is None:
             soft_forward_y = (y_logits_.detach() / 0.001 - y_logits_).detach() + y_logits_
         else:
-            soft_forward_y = top_k_filter_3d(y_logits_, args.topk, mask=mask_t, extra_mask=z_mask) / 0.001
+            soft_forward_y = top_k_filter_3d(y_logits_, args.topk, mask=mask_t,
+                                             extra_mask=z_mask) / 0.001
 
-    xy_embeds = embed_inputs(
-        model_wrapper.module.get_input_embeddings().weight,
-        soft_forward_y,
-        x_onehot=soft_forward_x,
-        device=soft_forward_x.device
-    )
+    xy_embeds = embed_inputs(model_wrapper.module.get_input_embeddings().weight,
+                             soft_forward_y,
+                             x_onehot=soft_forward_x,
+                             device=soft_forward_x.device)
     input_batch = {'past_key_values': x_model_past, 'inputs_embeds': xy_embeds}
     # collect response during soft forward
-    response_batch = model_wrapper.run_inference(inputs=input_batch, outputs=expert_per_layer.keys(), trainable=True)
+    response_batch = model_wrapper.run_inference(inputs=input_batch,
+                                                 outputs=expert_per_layer.keys(),
+                                                 trainable=True)
 
     # all_vals.shape = [n_layer, U]
     references = []
@@ -151,13 +158,13 @@ def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_mod
         unit = val['units']
         ref = val['values']
         if only_last_token:
-                    # [B, U]
+            # [B, U]
             curr_expert_act = response_batch[layer_name][:, -1, unit]
             ref = ref.view(1, -1)  # [1, U]
         else:
-                    # [B, T, U]
+            # [B, T, U]
             curr_expert_act = response_batch[layer_name][:, :, unit]
-            ref = ref.view(1, 1, -1) # [1, 1, U]
+            ref = ref.view(1, 1, -1)  # [1, 1, U]
         current_activations.append(curr_expert_act)
         references.append(ref)
 
@@ -170,6 +177,7 @@ def expert_activation_constraint(model_wrapper, soft_forward_x, y_logits_, x_mod
     if len(expert_loss.shape) > 1:
         expert_loss = expert_loss.mean(-1)
     return expert_loss
+
 
 def attr_control_constraint(model,
                             args,
@@ -197,11 +205,11 @@ def attr_control_constraint(model,
                                              extra_mask=z_mask) / 0.001
 
     y_logits_n, classifier_logits = soft_forward(model,
-                                                soft_forward_x,
-                                                soft_forward_y,
-                                                x_past=x_model_past,
-                                                return_scorer=True,
-                                                pool_method=pool_method)
+                                                 soft_forward_x,
+                                                 soft_forward_y,
+                                                 x_past=x_model_past,
+                                                 return_scorer=True,
+                                                 pool_method=pool_method)
 
     classifier_probs = torch.softmax(classifier_logits, dim=-1)
     # since we want to maximize this, negative here
