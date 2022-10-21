@@ -76,7 +76,9 @@ def train(model, dataloaders: Dict[str, torch.utils.data.DataLoader], args, devi
                                     weight_decay=args.weight_decay,
                                     momentum=0.9)
     elif args.optimizer == 'adamw':
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        optimizer = torch.optim.AdamW(model.parameters(),
+                                      lr=args.lr,
+                                      weight_decay=args.weight_decay)
     else:
         raise NotImplementedError(f'{args.optimizer} not setup.')
 
@@ -195,13 +197,12 @@ def main():
     if not os.path.exists(args.checkpoint_dir):
         os.makedirs(args.checkpoint_dir, exist_ok=True)
     logging.basicConfig(handlers=[
-                        logging.FileHandler(
-                            os.path.join(args.checkpoint_dir, 'train_log.log'), mode='a'),
-                        logging.StreamHandler(),
-                    ],
-                    format='%(asctime)s:%(msecs)d|%(name)s|%(levelname)s: %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S',
-                    level=logging.INFO)
+        logging.FileHandler(os.path.join(args.checkpoint_dir, 'train_log.log'), mode='a'),
+        logging.StreamHandler(),
+    ],
+                        format='%(asctime)s:%(msecs)d|%(name)s|%(levelname)s: %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        level=logging.INFO)
     logging.info('Start Training!')
 
     # Load pretrained model

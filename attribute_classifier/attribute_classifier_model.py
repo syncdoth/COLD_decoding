@@ -26,10 +26,10 @@ def pool_hidden_states(hidden_states: torch.LongTensor,
             sequence_lengths = -1
             logger.warning(
                 f"The model will not detect padding tokens in `inputs_embeds`. Results may be "
-                "unexpected if using padding tokens in conjunction with `inputs_embeds.`"
-            )
+                "unexpected if using padding tokens in conjunction with `inputs_embeds.`")
     if pool_method == 'last':
-        pooled_states = hidden_states[torch.arange(batch_size, device=hidden_states.device), sequence_lengths]
+        pooled_states = hidden_states[torch.arange(batch_size, device=hidden_states.device),
+                                      sequence_lengths]
     elif pool_method in ('mean', 'max'):
         if isinstance(sequence_lengths, int):
             if pool_method == 'mean':
@@ -37,7 +37,8 @@ def pool_hidden_states(hidden_states: torch.LongTensor,
             return hidden_states.max(1)[0]
 
         real_hidden_states = hidden_states[real_sequence]  # [-1, E]
-        real_states_split = torch.split(real_hidden_states, (sequence_lengths + 1).tolist())  # B * [T, E]
+        real_states_split = torch.split(real_hidden_states,
+                                        (sequence_lengths + 1).tolist())  # B * [T, E]
         if pool_method == 'mean':
             # [B, E]
             pooled_states = torch.stack([state.mean(0) for state in real_states_split], dim=0)
@@ -56,6 +57,7 @@ class AttributeClassifier(GPT2ForSequenceClassification):
 
     added option of pooling over hidden states: max, mean, last
     """
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -100,9 +102,8 @@ class AttributeClassifier(GPT2ForSequenceClassification):
         else:
             batch_size, sequence_length = inputs_embeds.shape[:2]
 
-        assert (
-            self.config.pad_token_id is not None or batch_size == 1
-        ), "Cannot handle batch sizes > 1 if no padding token is defined."
+        assert (self.config.pad_token_id is not None or
+                batch_size == 1), "Cannot handle batch sizes > 1 if no padding token is defined."
 
         pooled_states = pool_hidden_states(hidden_states,
                                            batch_size,
@@ -116,7 +117,8 @@ class AttributeClassifier(GPT2ForSequenceClassification):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                elif self.num_labels > 1 and (labels.dtype == torch.long or
+                                              labels.dtype == torch.int):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"
@@ -177,20 +179,10 @@ class DoubleHeadModel(GPT2LMHeadModel):
             `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`
             are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
         """
-        output = super().forward(input_ids,
-                                 past_key_values,
-                                 attention_mask,
-                                 token_type_ids,
-                                 position_ids,
-                                 head_mask,
-                                 inputs_embeds,
-                                 encoder_hidden_states,
-                                 encoder_attention_mask,
-                                 labels,
-                                 use_cache,
-                                 output_attentions,
-                                 output_hidden_states,
-                                 return_dict)
+        output = super().forward(input_ids, past_key_values, attention_mask, token_type_ids,
+                                 position_ids, head_mask, inputs_embeds, encoder_hidden_states,
+                                 encoder_attention_mask, labels, use_cache, output_attentions,
+                                 output_hidden_states, return_dict)
         if not return_scorer:
             return output
 
@@ -202,4 +194,3 @@ class DoubleHeadModel(GPT2LMHeadModel):
                                           pool_method=pool_method)
         logits = self.score(pooled_state)
         return output, logits
-
