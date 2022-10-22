@@ -221,6 +221,10 @@ def options():
                         type=int,
                         help="the index of the desired attribute we want to control.")
     parser.add_argument("--prompt", type=str, help="the prompt to use in prompted_generation case.")
+    # optimize not the logit space, but the hidden state space
+    parser.add_argument("--optimize_hidden_states",
+                        action='store_true',
+                        help="optimize not the logit space, but the hidden state space")
 
     args = parser.parse_args()
     return args
@@ -337,7 +341,12 @@ def decode(model,
 
     # init logits distribution
     if args.init_mode == 'random':
-        init_logits = initialize(model, x_encoded, length, args.init_temp, device)
+        init_logits, init_states = initialize(model,
+                                              x_encoded,
+                                              length,
+                                              args.init_temp,
+                                              device,
+                                              return_hidden_states=args.optimize_hidden_states)
     elif args.init_mode == 'original':
         assert z_onehot is not None, ("--init-mode original means to use original"
                                       " reference; sent_constraint required.")
@@ -357,9 +366,7 @@ def decode(model,
     if args.wandb:
         if not args.wandb_runname:
             args.wandb_runname = f'{args.mode}-{round(time.time() * 1000)}'
-        experiment = wandb.init(project='COLD Decoding',
-                                name=args.wandb_runname,
-                                config=args)
+        experiment = wandb.init(project='COLD Decoding', name=args.wandb_runname, config=args)
 
     assert args.prefix_length <= 0  # Otherwise not compatible with batch mode
 
@@ -371,8 +378,12 @@ def decode(model,
                        dtype=init_logits.dtype,
                        device=device))
 
-    y_logits = init_logits
-    epsilon = torch.nn.Parameter(torch.zeros_like(y_logits))
+    if args.optimize_hidden_states:
+        y_states = init_states
+        epsilon = torch.nn.Parameter(torch.zeros_like(y_states))
+    else:
+        y_logits = init_logits
+        epsilon = torch.nn.Parameter(torch.zeros_like(y_logits))
     if args.prefix_length > 0:
         optim = torch.optim.Adam([epsilon, prefix_logits], lr=args.stepsize)
     else:
@@ -401,8 +412,13 @@ def decode(model,
 
     for it in range(args.num_iters):
         optim.zero_grad()
-        y_logits_t = y_logits + epsilon
+        if args.optimize_hidden_states:
+            y_states_t = y_states + epsilon
+            y_logits_t = model.lm_head(y_states_t)
+        else:
+            y_logits_t = y_logits + epsilon
 
+        # TODO: optimize_hidden_states
         mask_t, fluency_loss = fluency_constraint(
             model,
             args,
@@ -429,6 +445,7 @@ def decode(model,
 
         if "right_context_pred" in constraint_functions and args.right_context_pred_weight > 0:
             # right-context prediction constraint
+            # TODO: optimize_hidden_states
             r_pred_loss = right_context_pred_constraint(model, args, z_encoded, z_onehot,
                                                         y_logits_t, soft_forward_x)
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
@@ -440,6 +457,7 @@ def decode(model,
 
         if "attr_control" in constraint_functions and args.attr_control_weight > 0:
             # attribute control with classifer gradients
+            # TODO: optimize_hidden_states
             attr_control_loss = attr_control_constraint(model,
                                                         args,
                                                         y_logits_t,
@@ -807,6 +825,9 @@ def prompted_generation(model,
 
 def main():
     args = options()
+    if args.optimize_hidden_states:
+        # TODO
+        raise NotImplementedError("Not implemented yet!")
     device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
 
     if args.seed != -1:
