@@ -30,7 +30,7 @@ from constraints import (attr_control_constraint, expert_activation_constraint, 
                          keyword_lexical_constraint, right_context_pred_constraint,
                          sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
-                  initialize, one_hot, post_process, post_sent, rank_and_filter, set_random_seeds,
+                  initialize, lm_score_from_logits, one_hot, post_process, post_sent, rank_and_filter, set_random_seeds,
                   to_device, top_k_filter_3d)
 
 stop_words = set(stopwords.words('english'))
@@ -576,18 +576,18 @@ def decode(model,
                                                     tokenizer,
                                                     extra_mask=z_mask)
 
-    last_rank_loss = model(input_ids=last_text_ids, labels=last_text_ids).loss
-    last_rank_loss = last_rank_loss.detach().clone().data.cpu().numpy()
+    last_logits = model(input_ids=last_text_ids).logits
+    last_rank_loss = lm_score_from_logits(last_logits, last_text_ids).detach().clone().data.cpu().numpy()
     text_post = post_process(last_text_ids, model, args.max_length, args.length, tokenizer, device)
     ppl_last = np.exp(last_rank_loss)
 
     if args.verbose or args.wandb:
-        for txt, post in zip(text, text_post):
+        for txt, post, ppl in zip(text, text_post, ppl_last):
             if args.verbose:
-                print(f"[final]: {txt}\n{ppl_last:.4f}")
+                print(f"[final]: {txt}\n{ppl:.4f}")
                 print(f"[final complete sentence]: {post}\n")
             if args.wandb:
-                text_table.add_data(args.num_iters + 1, prompt, post, ppl_last)
+                text_table.add_data(args.num_iters + 1, prompt, post, ppl)
 
     if args.wandb:
         experiment.log({"generated texts" : text_table})

@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 import nltk
 import numpy as np
 import torch
+from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 from nltk import tokenize
 
@@ -110,7 +111,7 @@ def get_text_from_logits(logits, tokenizer):
         logp += logp_logits[range(bs), last.squeeze(-1).data.cpu().numpy()]
 
     nll = -logp
-    ppl = np.exp(nll)  # TODO: this is not actually a perplexity!!!!
+    ppl = np.exp(nll / logits.shape[1])  # TODO: this is not actually a perplexity!!!!
     batch_size = output_so_far.shape[0]
     text = []
     for i in range(batch_size):
@@ -820,3 +821,13 @@ def get_keywords(z, x, args):
 
 def to_device(device, *tensors):
     return (ten.to(device) if ten is not None else None for ten in tensors)
+
+
+def lm_score_from_logits(lm_logits, labels, ignore_index=-100):
+    # Shift so that tokens < n predict n
+    shift_logits = lm_logits[..., :-1, :].contiguous()  # [..., T, V]
+    shift_labels = labels[..., 1:].contiguous()   # [..., T]
+    # Flatten the tokens
+    loss_fct = CrossEntropyLoss(reduction='none', ignore_index=ignore_index)
+    loss = loss_fct(shift_logits.transpose(-1, -2), shift_labels)  # [..., T]
+    return loss.mean(-1)  # [...]
