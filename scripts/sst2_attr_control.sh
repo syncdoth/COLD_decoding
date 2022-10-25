@@ -6,18 +6,19 @@ function control_gen() {
 	exp_name=$2
 	class_idx=$3
 	cw=$4
+	lr=$5
 	script="python3 cold_decoding.py \
 		--seed 12 \
 		--mode prompted_generation \
 		--pretrained_model gpt2-xl \
 		--init-temp 1 \
-		--length 20 \
-		--max-length 20 \
+		--length 40 \
+		--max-length 40 \
 		--num-iters 2000 \
 		--min-iters 1000 \
 		--constraint-weight $cw \
 		--attr_control_weight 1.0 \
-		--stepsize 0.1 \
+		--stepsize $lr \
 		--noise-iters 1 \
 		--win-anneal-iters 1000 \
 		--grad_clip 5.0 \
@@ -44,10 +45,15 @@ function control_gen() {
 		--wandb-runname $exp_name"
 	eval $script
 }
-for cw in 0.2 0.4 0.5 0.8 1.0; do
-	# positive
-	control_gen "The food at the restaurant was" "gpt2-xl-ctrl_sst2_pos-pool_last-cw$cw" 1 $cw 
+# debug
+# control_gen "The potato" "debug" 1 0 0.1
 
-	# negative
-	control_gen "The food at the restaurant was" "gpt2-xl-ctrl_sst2_neg-pool_last-cw$cw" 0 $cw
+for cw in 0.1 0.2 0.4 0.6 0.8 0.9 1.0; do
+	for lr in 0.1 0.05 0.01; do
+		# positive
+		control_gen "The potato" "potato-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_pos-pool_last" 1 $cw $lr
+
+		# negative
+		control_gen "The potato" "potato-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_neg-pool_last" 0 $cw $lr
+	done
 done
