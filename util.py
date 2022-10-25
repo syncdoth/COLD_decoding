@@ -142,7 +142,7 @@ def one_hot(tensor, dimension):
     return onehot
 
 
-def initialize(model, x, length, temperature, device):
+def initialize(model, x, length, temperature, device, return_hidden_states=False):
     if x.dim() == 1:
         x = x.unsqueeze(0)
     past = None
@@ -168,11 +168,16 @@ def initialize(model, x, length, temperature, device):
         logits = logits.unsqueeze(1)
         logits_so_far = logits if logits_so_far is None else torch.cat(
             (logits_so_far, logits), dim=1)
+
         last_token_embedding = embed_inputs(embedding=model.get_input_embeddings().weight,
                                             logits=logits,
                                             device=device)
 
-    return logits_so_far
+    if return_hidden_states:
+        hidden_states = model_outputs.hidden_states[-1]
+        return logits_so_far, hidden_states
+
+    return logits_so_far, None
 
 
 def decode_with_model_topk(model, y_logits, topk, x_onehot, x_past, tokenizer, extra_mask=None):
@@ -276,7 +281,13 @@ def additional_nll(logits, cur_text_ids):
     return torch.nn.CrossEntropyLoss()(logits.view(-1, logits.shape[-1]), cur_text_ids.view(-1))
 
 
-def soft_forward(model, x_onehot, y_logits, x_past=None, detach=True, return_scorer=False, pool_method='last'):
+def soft_forward(model,
+                 x_onehot,
+                 y_logits,
+                 x_past=None,
+                 detach=True,
+                 return_scorer=False,
+                 pool_method='last'):
     """
     computes logits for $y$, based on a fixed context $y$ and the current logit distribution of $y$
     :param model:
@@ -801,3 +812,7 @@ def get_keywords(z, x, args):
         ret_words = [w for w in ret_words if w not in x_words]
 
     return ' '.join(ret_words)
+
+
+def to_device(device, *tensors):
+    return (ten.to(device) if ten is not None else None for ten in tensors)
