@@ -1,8 +1,8 @@
 python attribute_classifier/train_classifier.py \
     --pretrained_model gpt2-xl \
     --pool_method last \
-    --dataname sst2 \
-    --num_labels 2 \
+    --dataname /home/data/corpora/StanfordSentimentTreebank_PTB/preprocessed_sst5 \
+    --num_labels 5 \
     --n_epochs 10 \
     --batch_size 32 \
     --max_length 64 \
@@ -12,4 +12,4 @@ python attribute_classifier/train_classifier.py \
     --linear_scheduler \
     --seed 2022 \
     --verbose \
-    --checkpoint_dir saved_models/gpt2-xl-sst2-pool_last-seed2022/
+    --checkpoint_dir saved_models/gpt2-xl-sst5-pool_last-seed2022/
