@@ -48,12 +48,15 @@ function control_gen() {
 # debug
 # control_gen "The potato" "debug" 1 0 0.1
 
-for cw in 0.1 0.2 0.4 0.6 0.8 0.9 1.0; do
-	for lr in 0.1 0.05 0.01; do
-		# positive
-		control_gen "The potato" "potato-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_pos-pool_last" 1 $cw $lr
+prompts_file="data/pplm_prompts.txt"
+while IFS= read -r prompt; do
+	for lr in 0.3 0.1; do
+		for cw in 0.1 0.2 0.4 0.6 0.8 0.9 1.0; do
+			# positive
+			control_gen "$prompt" "pplm_prompt-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_pos-pool_last" 1 $cw $lr
 
-		# negative
-		control_gen "The potato" "potato-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_neg-pool_last" 0 $cw $lr
+			# negative
+			control_gen "$prompt" "pplm_prompt-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_neg-pool_last" 0 $cw $lr
+		done
 	done
-done
+done < "$prompts_file"
