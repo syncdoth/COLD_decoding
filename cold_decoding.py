@@ -433,6 +433,7 @@ def decode(model,
             z_mask=z_mask,
             z_onehot=z_onehot,
         )
+        # fluency_loss = torch.zeros(args.batch_size).to(device)  # for debugging
 
         # n-gram similarity constraint
         constraint_loss = {}
@@ -492,6 +493,8 @@ def decode(model,
 
         if it < args.num_iters - 1:  # so that the mask_t at the last iteration will not change
             loss.backward()
+            # print(f"[DEBUG]: iter: {it}, gradient at:")
+            # print(torch.ne(epsilon.grad.sum(-1), 0).int())
             if args.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_([epsilon], args.grad_clip)
             optim.step()
@@ -512,12 +515,15 @@ def decode(model,
                       f"fluency_loss: {fluency_loss[bi].item():.4f}, "
                       f"c_loss: {c_loss[bi].item():.4f}, "
                       f"lr: {last_lr:.4f}, |{text[bi]}|")
+            wandb.log({
+                'generated_text': {bi: g_txt for bi, g_txt in enumerate(text, 1)}
+            })
 
         if args.wandb:
             log_items = {
                 "Loss": loss.item(),
-                'fluency loss': {f'gen-{i + 1}': v.item() for i, v in enumerate(fluency_loss)},
-                'constraint loss': {f'gen-{i + 1}': v.item() for i, v in enumerate(c_loss)},
+                'fluency loss': {f'gen-{i}': v.item() for i, v in enumerate(fluency_loss, 1)},
+                'constraint loss': {f'gen-{i}': v.item() for i, v in enumerate(c_loss, 1)},
                 "Gassian_Noise_STD": noise_std,
                 "LR": last_lr,
                 "Gradient": torch.norm(epsilon.grad).detach().clone().data.cpu().numpy()
