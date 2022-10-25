@@ -110,7 +110,7 @@ def get_text_from_logits(logits, tokenizer):
         logp += logp_logits[range(bs), last.squeeze(-1).data.cpu().numpy()]
 
     nll = -logp
-    ppl = np.exp(nll)
+    ppl = np.exp(nll)  # TODO: this is not actually a perplexity!!!!
     batch_size = output_so_far.shape[0]
     text = []
     for i in range(batch_size):
