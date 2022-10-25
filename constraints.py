@@ -45,7 +45,7 @@ def fluency_constraint(model,
     z_onehot: the lexical constraint sequence's one-hot encoded version. [B, T, V]
     """
     soft_forward_y = y_logits_t / 0.001
-    if args.straight_through:
+    if args.straight_through:  # TODO: what does this mean?
         if mask_t is None:
             soft_forward_y = (y_logits_t.detach() / 0.001 - y_logits_t).detach() + y_logits_t
         else:
