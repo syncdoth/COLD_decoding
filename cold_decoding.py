@@ -520,7 +520,7 @@ def decode(model,
                     print(f"{it + 1}, loss: {loss.item():.4f}, "
                           f"fluency_loss: {fluency_loss[bi].item():.4f}, "
                           f"c_loss: {c_loss[bi].item():.4f}, "
-                          f"ppl: {ppl[bi]:.4f}"
+                          f"ppl: {ppl[bi]:.4f}, "
                           f"lr: {last_lr:.4f}, |{text[bi]}|")
                 if args.wandb:
                     text_table.add_data(it + 1, prompt, text[bi], ppl[bi].item())
