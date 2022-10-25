@@ -370,6 +370,7 @@ def decode(model,
         experiment = wandb.init(project=args.wandb_project,
                                 name=args.wandb_runname,
                                 config=args)
+        text_table = wandb.Table(columns=["step", "prompt", "generation", "ppl"])
 
     assert args.prefix_length <= 0  # Otherwise not compatible with batch mode
 
@@ -432,6 +433,7 @@ def decode(model,
             model_back=model_back,
             z_mask=z_mask,
             z_onehot=z_onehot,
+            temperature=0.001,  # TODO: hardcoded
         )
         # fluency_loss = torch.zeros(args.batch_size).to(device)  # for debugging
 
@@ -451,7 +453,8 @@ def decode(model,
             # right-context prediction constraint
             # TODO: optimize_hidden_states
             r_pred_loss = right_context_pred_constraint(model, args, z_encoded, z_onehot,
-                                                        y_logits_t, soft_forward_x)
+                                                        y_logits_t, soft_forward_x,
+                                                        temperature=0.3)  # TODO: hardcoded
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
         if "keyword" in constraint_functions and args.keyword_weight > 0:
@@ -470,7 +473,8 @@ def decode(model,
                                                         mask_t=mask_t,
                                                         z_mask=z_mask,
                                                         pool_method=args.pool_method,
-                                                        attribute_class_idx=args.attr_cls_idx)
+                                                        attribute_class_idx=args.attr_cls_idx,
+                                                        temperature=0.3)  # TODO: hardcoded
             constraint_loss["attr_control"] = attr_control_loss * args.attr_control_weight
 
         if "selfcond" in constraint_functions and args.selfcond_weight > 0 and args.selfcond_mode == 'constraint':
@@ -482,7 +486,8 @@ def decode(model,
                                                        args,
                                                        only_last_token=only_last_token,
                                                        mask_t=mask_t,
-                                                       z_mask=z_mask)
+                                                       z_mask=z_mask,
+                                                       temperature=0.3)  # TODO: hardcoded
 
             constraint_loss["keyword"] = expert_loss * args.selfcond_weight
 
@@ -501,23 +506,24 @@ def decode(model,
             scheduler.step()  # turn off the scheduler
             last_lr = scheduler.get_last_lr()[0]
 
-        if args.verbose and ((it + 1) % args.print_every == 0 or it == 0 or
-                             it + 1 == args.num_iters):
-            text, _, _ = decode_with_model_topk(model,
-                                                y_logits_t,
-                                                args.topk,
-                                                soft_forward_x,
-                                                x_model_past,
-                                                tokenizer,
-                                                extra_mask=z_mask)
+        if (args.verbose or args.wandb) and ((it + 1) % args.print_every == 0 or it == 0 or
+                                             it + 1 == args.num_iters):
+            text, ppl, _ = decode_with_model_topk(model,
+                                                  y_logits_t,
+                                                  args.topk,
+                                                  soft_forward_x,
+                                                  x_model_past,
+                                                  tokenizer,
+                                                  extra_mask=z_mask)
             for bi in range(args.batch_size):
-                print(f"{it + 1}, loss: {loss.item():.4f}, "
-                      f"fluency_loss: {fluency_loss[bi].item():.4f}, "
-                      f"c_loss: {c_loss[bi].item():.4f}, "
-                      f"lr: {last_lr:.4f}, |{text[bi]}|")
-            wandb.log({
-                'generated_text': {bi: g_txt for bi, g_txt in enumerate(text, 1)}
-            })
+                if args.verbose:
+                    print(f"{it + 1}, loss: {loss.item():.4f}, "
+                          f"fluency_loss: {fluency_loss[bi].item():.4f}, "
+                          f"c_loss: {c_loss[bi].item():.4f}, "
+                          f"ppl: {ppl[bi]:.4f}"
+                          f"lr: {last_lr:.4f}, |{text[bi]}|")
+                if args.wandb:
+                    text_table.add_data(it + 1, prompt, text[bi], ppl[bi].item())
 
         if args.wandb:
             log_items = {
@@ -562,9 +568,6 @@ def decode(model,
                 else:
                     y_logits = y_logits + noise
 
-    if args.wandb:
-        wandb.finish()
-
     text, _, last_text_ids = decode_with_model_topk(model,
                                                     y_logits_t,
                                                     args.topk,
@@ -578,10 +581,17 @@ def decode(model,
     text_post = post_process(last_text_ids, model, args.max_length, args.length, tokenizer, device)
     ppl_last = np.exp(last_rank_loss)
 
-    if args.verbose:
+    if args.verbose or args.wandb:
         for txt, post in zip(text, text_post):
-            print(f"[final]: {txt}\n{ppl_last:.4f}")
-            print(f"[final complete sentence]: {post}\n")
+            if args.verbose:
+                print(f"[final]: {txt}\n{ppl_last:.4f}")
+                print(f"[final complete sentence]: {post}\n")
+            if args.wandb:
+                text_table.add_data(args.num_iters + 1, prompt, post, ppl_last)
+
+    if args.wandb:
+        experiment.log({"generated texts" : text_table})
+        wandb.finish()
 
     return ppl_last, text, text_post
 

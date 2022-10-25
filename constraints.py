@@ -4,14 +4,16 @@ from bleuloss import batch_log_bleulosscnn_ae
 from util import embed_inputs, soft_backward, soft_forward, soft_forward_xyz, soft_nll, top_k_filter_3d
 
 
-def right_context_pred_constraint(model, args, z_encoded, z_onehot, y_logits_t, soft_forward_x):
+def right_context_pred_constraint(model, args, z_encoded, z_onehot, y_logits_t, soft_forward_x, temperature=0.3):
     """
     z_encoded: the right context. [B, T]
     z_onehot: the right context's one-hot encoded version. [B, T, V]
     y_logits_t: current optimized logit. [B, T, V]
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
+    temperature: temperature for the softmax over the current logit `y_logits_t`.
+        Default=0.3, which does not result a very sharp distribution.
     """
-    soft_forward_y_t = (y_logits_t.detach() / 0.3 - y_logits_t).detach() + y_logits_t
+    soft_forward_y_t = (y_logits_t.detach() / temperature - y_logits_t).detach() + y_logits_t
     xyz_logits, xy_length = soft_forward_xyz(model, soft_forward_x, soft_forward_y_t, z_onehot)
 
     # Reshaping
@@ -35,7 +37,8 @@ def fluency_constraint(model,
                        mask_t=None,
                        model_back=None,
                        z_mask=None,
-                       z_onehot=None):
+                       z_onehot=None,
+                       temperature=0.001):
     """
     y_logits_t: current optimized logit. [B, T, V]
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
@@ -43,14 +46,17 @@ def fluency_constraint(model,
     mask_t: mask for filtering topk logits.
     z_mask: the lexical constraint sequence (or keywords).  [V,]
     z_onehot: the lexical constraint sequence's one-hot encoded version. [B, T, V]
+    temperature: temperature for the softmax over the current logit `y_logits_t`.
+        Default=0.001, which makes the logit commit only to top 1~2 tokens, by
+        making the softmax distribution very sharp.
     """
-    soft_forward_y = y_logits_t / 0.001
+    soft_forward_y = y_logits_t / temperature
     if args.straight_through:  # TODO: what does this mean?
         if mask_t is None:
-            soft_forward_y = (y_logits_t.detach() / 0.001 - y_logits_t).detach() + y_logits_t
+            soft_forward_y = (y_logits_t.detach() / temperature - y_logits_t).detach() + y_logits_t
         else:
             soft_forward_y = top_k_filter_3d(y_logits_t, args.topk, mask=mask_t,
-                                             extra_mask=z_mask) / 0.001
+                                             extra_mask=z_mask) / temperature
 
     y_logits_n = soft_forward(model, soft_forward_x, soft_forward_y, x_past=x_model_past)
 
@@ -131,15 +137,20 @@ def expert_activation_constraint(model_wrapper,
                                  args,
                                  only_last_token=False,
                                  mask_t=None,
-                                 z_mask=None):
+                                 z_mask=None,
+                                 temperature=0.3):
+    """
+    temperature: temperature for the softmax over the current logit `y_logits_t`.
+        Default=0.3, which does not result a very sharp distribution.
+    """
     # get response of all expert neurons
-    soft_forward_y = y_logits_ / 0.001
+    soft_forward_y = y_logits_ / temperature
     if args.straight_through:
         if mask_t is None:
-            soft_forward_y = (y_logits_.detach() / 0.001 - y_logits_).detach() + y_logits_
+            soft_forward_y = (y_logits_.detach() / temperature - y_logits_).detach() + y_logits_
         else:
             soft_forward_y = top_k_filter_3d(y_logits_, args.topk, mask=mask_t,
-                                             extra_mask=z_mask) / 0.001
+                                             extra_mask=z_mask) / temperature
 
     xy_embeds = embed_inputs(model_wrapper.module.get_input_embeddings().weight,
                              soft_forward_y,
@@ -187,7 +198,8 @@ def attr_control_constraint(model,
                             mask_t=None,
                             z_mask=None,
                             pool_method='last',
-                            attribute_class_idx=1):
+                            attribute_class_idx=1,
+                            temperature=0.3):
     """
     y_logits_t: current optimized logit. [B, T, V]
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
@@ -195,14 +207,16 @@ def attr_control_constraint(model,
     mask_t: mask for filtering topk logits.
     z_mask: the lexical constraint sequence (or keywords).  [V,]
     z_onehot: the lexical constraint sequence's one-hot encoded version. [B, T, V]
+    temperature: temperature for the softmax over the current logit `y_logits_t`.
+        Default=0.3, which does not result a very sharp distribution.
     """
-    soft_forward_y = y_logits_t / 0.001
+    soft_forward_y = y_logits_t / temperature
     if args.straight_through:
         if mask_t is None:
-            soft_forward_y = (y_logits_t.detach() / 0.001 - y_logits_t).detach() + y_logits_t
+            soft_forward_y = (y_logits_t.detach() / temperature - y_logits_t).detach() + y_logits_t
         else:
             soft_forward_y = top_k_filter_3d(y_logits_t, args.topk, mask=mask_t,
-                                             extra_mask=z_mask) / 0.001
+                                             extra_mask=z_mask) / temperature
 
     y_logits_n, classifier_logits = soft_forward(model,
                                                  soft_forward_x,
