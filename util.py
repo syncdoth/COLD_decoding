@@ -101,12 +101,16 @@ def get_text_from_logits(logits, tokenizer):
     output_so_far = None
     last = None
     logp = 0
+
+    bs = logits.shape[0]
     for i in range(logits.shape[1]):
-        last = _greedy(logits[:, i, :])
+        last = _greedy(logits[:, i, :])  # [B, 1]
         output_so_far = last if output_so_far is None else torch.cat((output_so_far, last), dim=1)
-        logp += logits[:, i, :].log_softmax(-1).data.cpu().numpy()[:, last.data.cpu().numpy()]
+        logp_logits = logits[:, i, :].log_softmax(-1).data.cpu().numpy()
+        logp += logp_logits[range(bs), last.squeeze(-1).data.cpu().numpy()]
 
     nll = -logp
+    ppl = np.exp(nll)
     batch_size = output_so_far.shape[0]
     text = []
     for i in range(batch_size):
@@ -114,7 +118,7 @@ def get_text_from_logits(logits, tokenizer):
         text_i = text_i.replace('\n', ' ')
         text.append(text_i)
 
-    return text, nll, output_so_far
+    return text, ppl, output_so_far
 
 
 def get_text_from_logits_topk(logits, tokenizer, top_k=1):
