@@ -211,7 +211,8 @@ def main():
                                                 resid_pdrop=0,
                                                 embd_pdrop=0,
                                                 attn_pdrop=0,
-                                                summary_first_dropout=0)
+                                                summary_first_dropout=0,
+                                                num_labels=args.num_labels)
     model.to(device)
     # Freeze GPT-2 weights; only train the classifer on top
     freeze_module(model.transformer)
