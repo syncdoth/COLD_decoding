@@ -30,8 +30,8 @@ from constraints import (attr_control_constraint, expert_activation_constraint, 
                          keyword_lexical_constraint, right_context_pred_constraint,
                          sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
-                  initialize, lm_score_from_logits, one_hot, post_process, post_sent, rank_and_filter, set_random_seeds,
-                  to_device, top_k_filter_3d)
+                  initialize, lm_score_from_logits, one_hot, post_process, post_sent,
+                  rank_and_filter, set_random_seeds, to_device, top_k_filter_3d)
 
 stop_words = set(stopwords.words('english'))
 
@@ -45,7 +45,10 @@ def options():
     parser.add_argument("--print-every", type=int, default=200)
     parser.add_argument("--pretrained_model", type=str, default="gpt2-large")
     parser.add_argument("--wandb", action="store_true")
-    parser.add_argument("--wandb-project", type=str, default="COLD Decoding", help='runname for wandb')
+    parser.add_argument("--wandb-project",
+                        type=str,
+                        default="COLD Decoding",
+                        help='runname for wandb')
     parser.add_argument("--wandb-runname", type=str, help='runname for wandb')
     parser.add_argument("--straight-through", action="store_true")  # TODO: meaning?
     parser.add_argument("--topk", type=int, default=0)
@@ -367,9 +370,7 @@ def decode(model,
     if args.wandb:
         if not args.wandb_runname:
             args.wandb_runname = f'{args.mode}-{round(time.time() * 1000)}'
-        experiment = wandb.init(project=args.wandb_project,
-                                name=args.wandb_runname,
-                                config=args)
+        experiment = wandb.init(project=args.wandb_project, name=args.wandb_runname, config=args)
         text_table = wandb.Table(columns=["step", "prompt", "generation", "ppl"])
 
     assert args.prefix_length <= 0  # Otherwise not compatible with batch mode
@@ -452,8 +453,12 @@ def decode(model,
         if "right_context_pred" in constraint_functions and args.right_context_pred_weight > 0:
             # right-context prediction constraint
             # TODO: optimize_hidden_states
-            r_pred_loss = right_context_pred_constraint(model, args, z_encoded, z_onehot,
-                                                        y_logits_t, soft_forward_x,
+            r_pred_loss = right_context_pred_constraint(model,
+                                                        args,
+                                                        z_encoded,
+                                                        z_onehot,
+                                                        y_logits_t,
+                                                        soft_forward_x,
                                                         temperature=0.3)  # TODO: hardcoded
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
@@ -577,7 +582,8 @@ def decode(model,
                                                     extra_mask=z_mask)
 
     last_logits = model(input_ids=last_text_ids).logits
-    last_rank_loss = lm_score_from_logits(last_logits, last_text_ids).detach().clone().data.cpu().numpy()
+    last_rank_loss = lm_score_from_logits(last_logits,
+                                          last_text_ids).detach().clone().data.cpu().numpy()
     text_post = post_process(last_text_ids, model, args.max_length, args.length, tokenizer, device)
     ppl_last = np.exp(last_rank_loss)
 
@@ -590,7 +596,7 @@ def decode(model,
                 text_table.add_data(args.num_iters + 1, prompt, post, ppl)
 
     if args.wandb:
-        experiment.log({"generated texts" : text_table})
+        experiment.log({"generated texts": text_table})
         wandb.finish()
 
     return ppl_last, text, text_post

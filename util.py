@@ -826,7 +826,7 @@ def to_device(device, *tensors):
 def lm_score_from_logits(lm_logits, labels, ignore_index=-100):
     # Shift so that tokens < n predict n
     shift_logits = lm_logits[..., :-1, :].contiguous()  # [..., T, V]
-    shift_labels = labels[..., 1:].contiguous()   # [..., T]
+    shift_labels = labels[..., 1:].contiguous()  # [..., T]
     # Flatten the tokens
     loss_fct = CrossEntropyLoss(reduction='none', ignore_index=ignore_index)
     loss = loss_fct(shift_logits.transpose(-1, -2), shift_labels)  # [..., T]

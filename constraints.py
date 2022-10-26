@@ -4,7 +4,13 @@ from bleuloss import batch_log_bleulosscnn_ae
 from util import embed_inputs, soft_backward, soft_forward, soft_forward_xyz, soft_nll, top_k_filter_3d
 
 
-def right_context_pred_constraint(model, args, z_encoded, z_onehot, y_logits_t, soft_forward_x, temperature=0.3):
+def right_context_pred_constraint(model,
+                                  args,
+                                  z_encoded,
+                                  z_onehot,
+                                  y_logits_t,
+                                  soft_forward_x,
+                                  temperature=0.3):
     """
     z_encoded: the right context. [B, T]
     z_onehot: the right context's one-hot encoded version. [B, T, V]
