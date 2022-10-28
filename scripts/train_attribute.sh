@@ -3,7 +3,7 @@ python attribute_classifier/train_classifier.py \
     --pool_method last \
     --dataname /home/data/corpora/StanfordSentimentTreebank_PTB/preprocessed_sst5 \
     --num_labels 5 \
-    --n_epochs 10 \
+    --n_epochs 20 \
     --batch_size 32 \
     --max_length 64 \
     --optimizer adamw \
