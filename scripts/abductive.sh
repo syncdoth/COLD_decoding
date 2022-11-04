@@ -29,6 +29,11 @@ python3 cold_decoding.py  \
 	--large_gs_std 1,0.5,0.1,0.05  \
 	--input-file "./data/abductive/small_data.json" \
 	--output-dir "./outputs/abductive/" \
+	--output-filename 'abductive_base_params.json' \
 	--stepsize-ratio 1  \
     --batch-size 8 \
-    --print-every 200
+    --print-every 200 \
+	--wandb \
+	--wandb-project cold_decoding_reproduce \
+	--wandb-runname abductive_base_params
+	# --grad_clip 5.0

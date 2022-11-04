@@ -29,8 +29,13 @@ python3 cold_decoding.py \
 	--large_gs_std 1,0.5,0.1,0.05  \
 	--stepsize-ratio 1  \
     --batch-size 8 \
-    --repeat-batch 8 \
+    --repeat-batch 1 \
     --print-every 200 \
     --input-file "./data/commongen/commongen.dev.jsonl" \
-	--output-dir "./outputs/commongen/"
+	--output-dir "./outputs/commongen/" \
+	--output-filename 'commongen_base_params.json' \
+	--wandb \
+	--wandb-project cold_decoding_reproduce \
+	--wandb-runname commongen_base_params
+	# --grad_clip 5.0
 

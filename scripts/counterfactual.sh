@@ -30,7 +30,12 @@ python3 cold_decoding.py \
 	--large_gs_std 0.5,0.1,0.05  \
 	--input-file "./data/counterfactual/dev_data.json" \
 	--output-dir "./outputs/counterfactual/" \
+	--output-filename 'counterfactual_base_params.json' \
 	--stepsize-ratio 1  \
     --batch-size 8 \
-    --print-every 200
+    --print-every 200 \
+	--wandb \
+	--wandb-project cold_decoding_reproduce \
+	--wandb-runname counterfactual_base_params
+	# --grad_clip 5.0
 
