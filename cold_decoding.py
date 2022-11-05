@@ -316,6 +316,7 @@ def decode(model,
         keywords_encoded = keywords_encoded.unsqueeze(0).repeat(args.batch_size, 1)
     elif sent_constraint is not None:
         # NOTE: if no lexical (~keyword based) constraints, obtain keyword from main constraint
+        keywords_encoded = None
         z_words = word_tokenize(sent_constraint[2:])  # delete the ". " token we appended before
         z_nonstop_words = [
             w.lower() for w in z_words if w.lower() not in stop_words and w.isalnum()
@@ -455,13 +456,14 @@ def decode(model,
         if "right_context_pred" in constraint_functions and args.right_context_pred_weight > 0:
             # right-context prediction constraint
             # TODO: optimize_hidden_states
-            r_pred_loss = right_context_pred_constraint(model,
-                                                        args,
-                                                        z_encoded,
-                                                        z_onehot,
-                                                        y_logits_t,
-                                                        soft_forward_x,
-                                                        temperature=args.constraint_temp)  # TODO: hardcoded
+            r_pred_loss = right_context_pred_constraint(
+                model,
+                args,
+                z_encoded,
+                z_onehot,
+                y_logits_t,
+                soft_forward_x,
+                temperature=args.constraint_temp)  # TODO: hardcoded
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
         if "keyword" in constraint_functions and args.keyword_weight > 0:
@@ -472,29 +474,31 @@ def decode(model,
         if "attr_control" in constraint_functions and args.attr_control_weight > 0:
             # attribute control with classifer gradients
             # TODO: optimize_hidden_states
-            attr_control_loss = attr_control_constraint(model,
-                                                        args,
-                                                        y_logits_t,
-                                                        soft_forward_x,
-                                                        x_model_past,
-                                                        mask_t=mask_t,
-                                                        z_mask=z_mask,
-                                                        pool_method=args.pool_method,
-                                                        attribute_class_idx=args.attr_cls_idx,
-                                                        temperature=args.constraint_temp)  # TODO: hardcoded
+            attr_control_loss = attr_control_constraint(
+                model,
+                args,
+                y_logits_t,
+                soft_forward_x,
+                x_model_past,
+                mask_t=mask_t,
+                z_mask=z_mask,
+                pool_method=args.pool_method,
+                attribute_class_idx=args.attr_cls_idx,
+                temperature=args.constraint_temp)  # TODO: hardcoded
             constraint_loss["attr_control"] = attr_control_loss * args.attr_control_weight
 
         if "selfcond" in constraint_functions and args.selfcond_weight > 0 and args.selfcond_mode == 'constraint':
-            expert_loss = expert_activation_constraint(model_wrapper,
-                                                       soft_forward_x,
-                                                       y_logits_t,
-                                                       x_model_past,
-                                                       expert_per_layer,
-                                                       args,
-                                                       only_last_token=only_last_token,
-                                                       mask_t=mask_t,
-                                                       z_mask=z_mask,
-                                                       temperature=args.constraint_temp)  # TODO: hardcoded
+            expert_loss = expert_activation_constraint(
+                model_wrapper,
+                soft_forward_x,
+                y_logits_t,
+                x_model_past,
+                expert_per_layer,
+                args,
+                only_last_token=only_last_token,
+                mask_t=mask_t,
+                z_mask=z_mask,
+                temperature=args.constraint_temp)  # TODO: hardcoded
 
             constraint_loss["keyword"] = expert_loss * args.selfcond_weight
 
