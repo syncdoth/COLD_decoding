@@ -38,7 +38,7 @@ stop_words = set(stopwords.words('english'))
 
 def options():
     parser = argparse.ArgumentParser()
-    ## setting
+    # setting
     parser.add_argument("--seed", type=int, default=-1)
     parser.add_argument("--no-cuda", action="store_true", help="no cuda")
     parser.add_argument("--verbose", action="store_true")
@@ -53,7 +53,7 @@ def options():
     parser.add_argument("--straight-through", action="store_true")  # TODO: meaning?
     parser.add_argument("--topk", type=int, default=0)
     parser.add_argument("--rl-topk", type=int, default=0)
-    ## experiment
+    # experiment
     parser.add_argument("--input-file",
                         type=str,
                         default="./data/lexical/commongen_data/test.multi.constraint.json")
@@ -75,7 +75,7 @@ def options():
                             'lexical_generation', 'counterfactual_langevin', 'abductive_langevin',
                             'grammar', 'prompted_generation'
                         ])
-    ## model
+    # model
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--length",
                         type=int,
@@ -404,7 +404,7 @@ def decode(model,
 
     noise_std = 0.0
 
-    ## Encode x (prompt) beforehand
+    # Encode x (prompt) beforehand
     assert args.prefix_length <= 0, "The current code does not support prefix-length > 0"
     # The last token of x (prompt) is used in soft_forward; [B, 1, V]
     soft_forward_x = x_onehot[:, -1:, :]
@@ -547,7 +547,7 @@ def decode(model,
             }
             experiment.log(log_items)
 
-        ## noise
+        # noise
         if it < args.num_iters - 1:
 
             if 'grammar' in args.mode:
@@ -678,8 +678,8 @@ def counterfactual_reasoning(model,
                         torch_module = model.module
                     else:
                         torch_module = model
-                    text_post = rank_and_filter(text_post, text_ij, z_text_so_far, model, tokenizer,
-                                                device, args.no_loss_rerank)
+                    text_post = rank_and_filter(text_post, text_ij, z_text_so_far, torch_module,
+                                                tokenizer, device, args.no_loss_rerank)
 
                     if ii == len(x_text_so_far) - 1 and oi == len(ori_endings) - 1:
                         last_output = text_post
