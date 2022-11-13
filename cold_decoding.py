@@ -438,6 +438,7 @@ def decode(model,
             z_mask=z_mask,
             z_onehot=z_onehot,
             temperature=args.fluency_temp,
+            straight_through=args.straight_through,
         )
         # fluency_loss = torch.zeros(args.batch_size).to(device)  # for debugging
 
@@ -463,7 +464,8 @@ def decode(model,
                 z_onehot,
                 y_logits_t,
                 soft_forward_x,
-                temperature=args.constraint_temp)  # TODO: hardcoded
+                temperature=args.constraint_temp,
+            )
             constraint_loss["right_context_pred"] = r_pred_loss * args.right_context_pred_weight
 
         if "keyword" in constraint_functions and args.keyword_weight > 0:
@@ -484,7 +486,9 @@ def decode(model,
                 z_mask=z_mask,
                 pool_method=args.pool_method,
                 attribute_class_idx=args.attr_cls_idx,
-                temperature=args.constraint_temp)  # TODO: hardcoded
+                temperature=args.constraint_temp,
+                straight_through=args.straight_through,
+            )
             constraint_loss["attr_control"] = attr_control_loss * args.attr_control_weight
 
         if "selfcond" in constraint_functions and args.selfcond_weight > 0 and args.selfcond_mode == 'constraint':
@@ -498,7 +502,9 @@ def decode(model,
                 only_last_token=only_last_token,
                 mask_t=mask_t,
                 z_mask=z_mask,
-                temperature=args.constraint_temp)  # TODO: hardcoded
+                temperature=args.constraint_temp,
+                straight_through=args.straight_through,
+            )
 
             constraint_loss["keyword"] = expert_loss * args.selfcond_weight
 

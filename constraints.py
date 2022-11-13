@@ -44,7 +44,8 @@ def fluency_constraint(model,
                        model_back=None,
                        z_mask=None,
                        z_onehot=None,
-                       temperature=0.001):
+                       temperature=0.001,
+                       straight_through=True):
     """
     y_logits_t: current optimized logit. [B, T, V]
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
@@ -57,7 +58,7 @@ def fluency_constraint(model,
         making the softmax distribution very sharp.
     """
     soft_forward_y = y_logits_t / temperature
-    if args.straight_through:  # TODO: what does this mean?
+    if straight_through:  # TODO: what does this mean?
         if mask_t is None:
             soft_forward_y = (y_logits_t.detach() / temperature - y_logits_t).detach() + y_logits_t
         else:
@@ -144,14 +145,15 @@ def expert_activation_constraint(model_wrapper,
                                  only_last_token=False,
                                  mask_t=None,
                                  z_mask=None,
-                                 temperature=0.3):
+                                 temperature=0.3,
+                                 straight_through=True):
     """
     temperature: temperature for the softmax over the current logit `y_logits_t`.
         Default=0.3, which does not result a very sharp distribution.
     """
     # get response of all expert neurons
     soft_forward_y = y_logits_ / temperature
-    if args.straight_through:
+    if straight_through:
         if mask_t is None:
             soft_forward_y = (y_logits_.detach() / temperature - y_logits_).detach() + y_logits_
         else:
@@ -205,7 +207,8 @@ def attr_control_constraint(model,
                             z_mask=None,
                             pool_method='last',
                             attribute_class_idx=1,
-                            temperature=0.3):
+                            temperature=0.3,
+                            straight_through=True):
     """
     y_logits_t: current optimized logit. [B, T, V]
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
@@ -217,7 +220,7 @@ def attr_control_constraint(model,
         Default=0.3, which does not result a very sharp distribution.
     """
     soft_forward_y = y_logits_t / temperature
-    if args.straight_through:
+    if straight_through:
         if mask_t is None:
             soft_forward_y = (y_logits_t.detach() / temperature - y_logits_t).detach() + y_logits_t
         else:
