@@ -1,7 +1,12 @@
 nltk
-torch
 tqdm
-wandb
-transformers
-datasets
-torchmetrics
+pandas
+matplotlib
+jupyter
+pytorch::pytorch
+pytorch::torchvision
+pytorch::pytorch-cuda
+huggingface::transformers
+huggingface::datasets
+conda-forge::torchmetrics
+conda-forge::wandb
