@@ -17,7 +17,7 @@ function control_gen() {
 		--num-iters 2000 \
 		--min-iters 1000 \
 		--constraint-weight $cw \
-		--attr_control_weight 1.0 \
+		--attr_control_weight 10.0 \
 		--stepsize $lr \
 		--noise-iters 1 \
 		--win-anneal-iters 1000 \
@@ -27,6 +27,7 @@ function control_gen() {
 		--output-lgt-temp 1 \
 		--verbose \
 		--straight-through  \
+		--gs_std 0.01 \
 		--large-noise-iters 50,500,1000,1500 \
 		--large_gs_std 1,0.5,0.1,0.05  \
 		--stepsize-ratio 1  \
@@ -51,7 +52,8 @@ function control_gen() {
 lr=0.1
 prompts_file="data/pplm_prompts.txt"
 while IFS= read -r prompt; do
-	for cw in 0 0.1 0.2 0.4 0.6 0.8 0.9 1.0; do
+# for prompt in "The chicken" "The country"; do   # simple case
+	for cw in 0 0.2 0.4 0.6 0.8 1.0; do
 		# positive
 		control_gen "$prompt" "pplm_prompt-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_pos-pool_last" 1 $cw $lr
 
