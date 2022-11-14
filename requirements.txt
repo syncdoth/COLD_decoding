@@ -3,6 +3,7 @@ tqdm
 pandas
 matplotlib
 jupyter
+scikit-learn
 pytorch::pytorch
 pytorch::torchvision
 pytorch::pytorch-cuda
