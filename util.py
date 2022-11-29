@@ -98,14 +98,17 @@ def _topk(logits, k=10):
     return last
 
 
-def get_text_from_logits(logits, tokenizer):
+def get_text_from_logits(logits, tokenizer, topk=1):
     output_so_far = None
     last = None
     logp = 0
 
     bs = logits.shape[0]
     for i in range(logits.shape[1]):
-        last = _greedy(logits[:, i, :])  # [B, 1]
+        if topk > 1:
+            last = _topk(logits[:, i, :], topk)
+        else:
+            last = _greedy(logits[:, i, :])  # [B, 1]
         output_so_far = last if output_so_far is None else torch.cat((output_so_far, last), dim=1)
         logp_logits = logits[:, i, :].log_softmax(-1).data.cpu().numpy()
         logp += logp_logits[range(bs), last.squeeze(-1).data.cpu().numpy()]
@@ -185,36 +188,52 @@ def initialize(model, x, length, temperature, device, return_hidden_states=False
     return logits_so_far, None
 
 
-def decode_with_model_topk(model, y_logits, topk, x_onehot, x_past, tokenizer, extra_mask=None):
+def decode_with_model_topk(model, y_logits, topk, x_onehot, x_past, tokenizer, extra_mask=None,
+                           topk_from_model=True):
     assert x_onehot.shape[1] == 1, x_onehot.shape
     length = y_logits.shape[1]
     past = x_past
     input_embeds = torch.matmul(x_onehot.float(), model.get_input_embeddings().weight)
     mask_t_all = None
-    logits_so_far = None
+    model_logits_all = None
     for i in range(length):
         model_outputs = model(past_key_values=past, inputs_embeds=input_embeds)
         past = model_outputs.past_key_values
         logits_t = model_outputs.logits[:, -1:, :]
+        y_logits_i = y_logits[:, i:i + 1, :]
         assert logits_t.shape[1] == 1, logits_t.shape
-        _, indices_t = torch.topk(logits_t, topk)
-        mask_t = torch.zeros_like(logits_t).scatter_(2, indices_t, 1)
+        if topk_from_model:
+            _, indices_t = torch.topk(logits_t, topk)
+            mask_t = torch.zeros_like(logits_t).scatter_(2, indices_t, 1)
+            next_logits_prob = y_logits_i
+        else:
+            _, indices_t = torch.topk(y_logits_i, topk)
+            mask_t = torch.zeros_like(y_logits_i).scatter_(2, indices_t, 1)
+            next_logits_prob = logits_t
         mask_t_all = mask_t if mask_t_all is None else torch.cat((mask_t_all, mask_t), dim=1)
-        logits_so_far = logits_t if logits_so_far is None else torch.cat(
-            (logits_so_far, logits_t), dim=1)
+        model_logits_all = logits_t if model_logits_all is None else torch.cat(
+            (model_logits_all, logits_t), dim=1)
         if i < length - 1:
             if extra_mask is None:
-                y_logits_i_topk = top_k_filter_3d(y_logits[:, i:i + 1, :], topk,
+                next_logits_topk = top_k_filter_3d(next_logits_prob,
+                                                  topk,
                                                   mask=mask_t) / 0.001
             else:
-                y_logits_i_topk = top_k_filter_3d(y_logits[:, i:i + 1, :],
+                next_logits_topk = top_k_filter_3d(next_logits_prob,
                                                   topk,
                                                   mask=mask_t,
                                                   extra_mask=extra_mask[:, i:i + 1, :]) / 0.001
-            input_embeds = torch.matmul(F.softmax(y_logits_i_topk, dim=-1),
+            input_embeds = torch.matmul(F.softmax(next_logits_topk, dim=-1),
                                         model.get_input_embeddings().weight)
+    if topk_from_model:
+        return get_text_from_logits(
+            top_k_filter_3d(y_logits, topk, mask=mask_t_all, extra_mask=extra_mask),
+            tokenizer,
+            topk=topk)
     return get_text_from_logits(
-        top_k_filter_3d(y_logits, topk, mask=mask_t_all, extra_mask=extra_mask), tokenizer)
+        top_k_filter_3d(model_logits_all, topk, mask=mask_t_all, extra_mask=extra_mask),
+        tokenizer,
+        topk=topk)
 
 
 def post_process(text_ids, model, max_length, length, tokenizer, device):

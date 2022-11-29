@@ -75,6 +75,15 @@ def options():
                             'lexical_generation', 'counterfactual_langevin', 'abductive_langevin',
                             'grammar', 'prompted_generation'
                         ])
+    parser.add_argument("--discretize_method",
+                        type=str,
+                        default="model_over_cold",
+                        choices=[
+                            "raw", "cold_over_model", "model_over_cold"
+                            ],
+                        help="* raw: simple topk over COLD logits"
+                             "* cold_over_model: gpt prob is used to rank cold logits"
+                             "* model_over_cold: cold prob is used to rank gpt prob")
     # model
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--length",
@@ -227,6 +236,9 @@ def options():
                         type=int,
                         help="the index of the desired attribute we want to control.")
     parser.add_argument("--prompt", type=str, help="the prompt to use in prompted_generation case.")
+    parser.add_argument("--no_fluency_mask_in_attr_control",
+                        action='store_true',
+                        help="do not use fluency mask (mask_t) for attribute control constraint")
     # optimize not the logit space, but the hidden state space
     parser.add_argument("--optimize_hidden_states",
                         action='store_true',
@@ -482,7 +494,7 @@ def decode(model,
                 y_logits_t,
                 soft_forward_x,
                 x_model_past,
-                mask_t=mask_t,
+                mask_t=None if args.no_fluency_mask_in_attr_control else mask_t,
                 z_mask=z_mask,
                 pool_method=args.pool_method,
                 attribute_class_idx=args.attr_cls_idx,
@@ -525,13 +537,22 @@ def decode(model,
 
         if (args.verbose or args.wandb) and ((it + 1) % args.print_every == 0 or it == 0 or
                                              it + 1 == args.num_iters):
-            text, ppl, _ = decode_with_model_topk(model,
-                                                  y_logits_t,
-                                                  args.topk,
-                                                  soft_forward_x,
-                                                  x_model_past,
-                                                  tokenizer,
-                                                  extra_mask=z_mask)
+            if args.discretize_method == 'raw':
+                text, ppl = get_text_from_logits(
+                    top_k_filter_3d(y_logits_t, args.topk, extra_mask=z_mask),
+                    tokenizer,
+                    topk=args.topk)
+            else:
+                assert args.discretize_method in ('cold_over_model', 'model_over_cold')
+                topk_from_model = args.discretize_method == 'model_over_cold'
+                text, ppl, _ = decode_with_model_topk(model,
+                                                    y_logits_t,
+                                                    args.topk,
+                                                    soft_forward_x,
+                                                    x_model_past,
+                                                    tokenizer,
+                                                    extra_mask=z_mask,
+                                                    topk_from_model=topk_from_model)
             for bi in range(args.batch_size):
                 if args.verbose:
                     print(f"{it + 1}, loss: {loss.item():.4f}, "
@@ -585,13 +606,22 @@ def decode(model,
                 else:
                     y_logits = y_logits + noise
 
-    text, _, last_text_ids = decode_with_model_topk(model,
-                                                    y_logits_t,
-                                                    args.topk,
-                                                    soft_forward_x,
-                                                    x_model_past,
-                                                    tokenizer,
-                                                    extra_mask=z_mask)
+    if args.discretize_method == 'raw':
+        text, ppl = get_text_from_logits(
+            top_k_filter_3d(y_logits_t, args.topk, extra_mask=z_mask),
+            tokenizer,
+            topk=args.topk)
+    else:
+        assert args.discretize_method in ('cold_over_model', 'model_over_cold')
+        topk_from_model = args.discretize_method == 'model_over_cold'
+        text, _, last_text_ids = decode_with_model_topk(model,
+                                                        y_logits_t,
+                                                        args.topk,
+                                                        soft_forward_x,
+                                                        x_model_past,
+                                                        tokenizer,
+                                                        extra_mask=z_mask,
+                                                        topk_from_model=topk_from_model)
 
     last_logits = model(input_ids=last_text_ids).logits
     last_rank_loss = lm_score_from_logits(last_logits,
