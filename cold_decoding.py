@@ -23,7 +23,7 @@ from selfcond.expertise import get_expert_reference
 from selfcond.generation import force_units_hooks
 from selfcond.models import PytorchTransformersModel
 from torch import nn
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import AutoTokenizer, GPT2LMHeadModel, T5ForConditionalGeneration
 
 from attribute_classifier.attribute_classifier_model import DoubleHeadModel
 from constraints import (attr_control_constraint, expert_activation_constraint, fluency_constraint,
@@ -538,7 +538,7 @@ def decode(model,
         if (args.verbose or args.wandb) and ((it + 1) % args.print_every == 0 or it == 0 or
                                              it + 1 == args.num_iters):
             if args.discretize_method == 'raw':
-                text, ppl = get_text_from_logits(
+                text, ppl, _ = get_text_from_logits(
                     top_k_filter_3d(y_logits_t, args.topk, extra_mask=z_mask),
                     tokenizer,
                     topk=args.topk)
@@ -607,7 +607,7 @@ def decode(model,
                     y_logits = y_logits + noise
 
     if args.discretize_method == 'raw':
-        text, ppl = get_text_from_logits(
+        text, ppl, last_text_ids = get_text_from_logits(
             top_k_filter_3d(y_logits_t, args.topk, extra_mask=z_mask),
             tokenizer,
             topk=args.topk)
@@ -745,6 +745,63 @@ def counterfactual_reasoning(model,
 
     print(f"outputs: {outfile}")
 
+def abductive_reasoning_t5(model,
+                           tokenizer,
+                           data,
+                           args,
+                           model_back=None,
+                           device='cpu',
+                           outfile='output.json',
+                           **expert_kwargs):
+    fw = open(os.path.join(args.output_dir, outfile), 'w')
+
+    procssed = set()
+    for i, d in enumerate(data):
+        if i < args.start or i > args.end:
+            continue
+
+        x = d["obs1"].strip()[:-1]  # remove last punctuationb
+        z = d["obs2"].strip()
+
+        if ' '.join([x, z]) in procssed:
+            continue
+        procssed.add(' '.join([x, z]))
+
+        print("%d / %d" % (i, len(data)))
+        print('Output to: \t', outfile)
+
+        text_candidates = []
+        text_complete_candidates = []
+        for _ in range(args.repeat_batch):
+            encoded = tokenizer(f"{x} <extra_id_0> {z}", return_tensors="pt").to(device)
+            # sequence_ids = model.generate(**encoded, do_sample=True, top_k=args.topk, max_new_tokens=args.max_length)
+            sequence_ids = model.generate(**encoded, max_new_tokens=args.max_length)
+
+            # sequences
+            # ['<pad> <extra_id_0> park offers<extra_id_1> the<extra_id_2> park.</s>']
+            # need to parse
+            # extra_ids = tokenizer.encode('<extra_id_0><extra_id_1>')
+            # first_id = torch.where(sequence_ids == extra_ids[0])[1]
+            # second_id = torch.where(sequence_ids == extra_ids[1])[1]
+            # roi_ids = sequence_ids[:, first_id + 1:second_id]
+
+            text = tokenizer.batch_decode(sequence_ids)
+            # text_post = post_process(roi_ids, model, args.max_length, args.length, tokenizer, device)
+            text_post = text
+            text_candidates.extend(text)
+            text_complete_candidates.extend(text_post)
+
+        out = {
+            'x': x,
+            'z': z,
+            'generation': text_candidates,
+            'generation_complete': text_complete_candidates,
+        }
+
+        fw.write(json.dumps(out) + '\n')
+        fw.flush()
+
+    print(f"outputs: {outfile}")
 
 def abductive_reasoning(model,
                         tokenizer,
@@ -900,7 +957,12 @@ def main():
     if args.seed != -1:
         set_random_seeds(args.seed)
     # Load pretrained model
-    if args.selfcond:
+    if 't5' in args.pretrained_model:
+        model = T5ForConditionalGeneration.from_pretrained(args.pretrained_model)
+        model = model.to(device)
+        model.eval()
+        freeze_module(model)
+    elif args.selfcond:
         cache_dir = os.path.join(os.path.expanduser('~'), '.cache/huggingface/hub/')
         model = PytorchTransformersModel(args.pretrained_model,
                                          cache_dir,
@@ -918,7 +980,7 @@ def main():
                                                 summary_first_dropout=0,
                                                 num_labels=args.num_attributes)
         model.score.load_state_dict(torch.load(args.attribute_classifier_path))
-        model.to(device)
+        model = model.to(device)
         model.eval()
         # Freeze GPT-2 weights
         freeze_module(model)
@@ -930,13 +992,13 @@ def main():
                                                 embd_pdrop=0,
                                                 attn_pdrop=0,
                                                 summary_first_dropout=0)
-        model.to(device)
+        model = model.to(device)
         model.eval()
         # Freeze GPT-2 weights
         freeze_module(model)
 
     # Load tokenizer
-    tokenizer = GPT2Tokenizer.from_pretrained(args.pretrained_model)
+    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model)
 
     if args.use_back_model:
         from GPT2ForwardBackward.modeling_opengpt2 import OpenGPT2LMHeadModel
@@ -999,7 +1061,10 @@ def main():
     if "counterfactual" in args.mode:
         exp_run = counterfactual_reasoning
     elif "abductive" in args.mode:
-        exp_run = abductive_reasoning
+        if "t5" in args.pretrained_model:
+            exp_run = abductive_reasoning_t5
+        else:
+            exp_run = abductive_reasoning
     elif "lexical" in args.mode:
         exp_run = lexical_generation
     else:
