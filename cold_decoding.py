@@ -84,6 +84,7 @@ def options():
                         help="* raw: simple topk over COLD logits"
                              "* cold_over_model: gpt prob is used to rank cold logits"
                              "* model_over_cold: cold prob is used to rank gpt prob")
+    parser.add_argument("--force_tokens", action="store_true")
     # model
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--length",
@@ -882,17 +883,27 @@ def lexical_generation(model,
         text_candidates = []
         text_complete_candidates = []
         for _ in range(args.repeat_batch):
-            ppl_last, text, text_post = decode(model,
-                                               tokenizer,
-                                               args,
-                                               prompt=None,
-                                               sent_constraint=". " + constraints,
-                                               keyword_constraint=constraints,
-                                               constraint_functions=('right_context_pred',
-                                                                     'keyword'),
-                                               device=device,
-                                               model_back=model_back,
-                                               **expert_kwargs)
+            if args.force_tokens:
+                force_tokens = tokenizer.encode(constraints)
+                sequence_ids = model.generate(max_new_tokens=args.max_length,
+                                              force_words_ids=[force_tokens],
+                                              num_beams=4)
+                text = tokenizer.batch_decode(sequence_ids)
+                text_post = post_process(sequence_ids, model, args.max_length, args.length, tokenizer, device)
+                text_candidates.extend(text)
+                text_complete_candidates.extend(text_post)
+            else:
+                ppl_last, text, text_post = decode(model,
+                                                   tokenizer,
+                                                   args,
+                                                   prompt=None,
+                                                   sent_constraint=". " + constraints,
+                                                   keyword_constraint=constraints,
+                                                   constraint_functions=('right_context_pred',
+                                                                         'keyword'),
+                                                   device=device,
+                                                   model_back=model_back,
+                                                   **expert_kwargs)
             text_candidates.extend(text)
             text_complete_candidates.extend(text_post)
 
