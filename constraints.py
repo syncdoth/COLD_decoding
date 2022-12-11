@@ -1,6 +1,7 @@
 import torch
 
 from bleuloss import batch_log_bleulosscnn_ae
+from scale_grad import sg_loss
 from util import embed_inputs, soft_backward, soft_forward, soft_forward_xyz, soft_nll, top_k_filter_3d
 
 
@@ -122,6 +123,56 @@ def keyword_lexical_constraint(y_logits_t, keywords_id):
     return batch_log_bleulosscnn_ae(decoder_outputs=y_logits_t.transpose(0, 1),
                                     target_idx=keywords_id,
                                     ngram_list=[1])
+
+
+def keyword_sg_constraint(model,
+                          args,
+                          y_logits_t,
+                          soft_forward_x,
+                          x_model_past,
+                          mask_t=None,
+                          z_mask=None,
+                          temperature=0.001,
+                          straight_through=True):
+    """
+    y_logits_t: current optimized logit. [B, T, V]
+    soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
+    x_model_past: the past kv pairs of the LM cached from the left prompt.
+    mask_t: mask for filtering topk logits.
+    z_mask: the lexical constraint sequence (or keywords).  [V,]
+    temperature: temperature for the softmax over the current logit `y_logits_t`.
+        Default=0.001, which makes the logit commit only to top 1~2 tokens, by
+        making the softmax distribution very sharp.
+    """
+    soft_forward_y = y_logits_t / temperature
+    if straight_through:  # TODO: what does this mean?
+        if mask_t is None:
+            soft_forward_y = (y_logits_t.detach() / temperature - y_logits_t).detach() + y_logits_t
+        else:
+            soft_forward_y = top_k_filter_3d(y_logits_t, args.topk, mask=mask_t,
+                                             extra_mask=z_mask) / temperature
+
+    y_logits_n = soft_forward(model, soft_forward_x, soft_forward_y, x_past=x_model_past)
+
+    if args.topk == 0:
+        mask_t = None
+    else:
+        _, indices_t = torch.topk(y_logits_n, args.topk)
+        mask_t = torch.zeros_like(y_logits_n).scatter_(2, indices_t, 1)
+
+    # Compute loss, gradients, and update.
+    filtered_model_logits = top_k_filter_3d(y_logits_n / args.output_lgt_temp,
+                                            args.topk,
+                                            mask=mask_t,
+                                            extra_mask=z_mask)
+    lr_nll_loss = sg_loss(
+        filtered_model_logits,
+        y_logits_t / args.input_lgt_temp,
+        mask_t.bool() & z_mask.bool(),  # topk mask & keyword mask
+        args.sg_gamma,
+        mean_batch=False)
+
+    return mask_t, lr_nll_loss
 
 
 def sentence_ngram_similarity_constraint(y_logits_t, target_sent_id, max_ngram=4):
