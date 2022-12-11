@@ -133,7 +133,8 @@ def keyword_sg_constraint(model,
                           mask_t=None,
                           z_mask=None,
                           temperature=0.001,
-                          straight_through=True):
+                          straight_through=True,
+                          include_topk_mask=False):
     """
     y_logits_t: current optimized logit. [B, T, V]
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
@@ -165,14 +166,20 @@ def keyword_sg_constraint(model,
                                             args.topk,
                                             mask=mask_t,
                                             extra_mask=z_mask)
-    lr_nll_loss = sg_loss(
+
+    bs = y_logits_t.shape[0]
+    keywords_mask = z_mask.unsqueeze(0).repeat(bs, 1).bool()
+    if include_topk_mask:
+        keywords_mask = keywords_mask | mask_t.bool()
+
+    sg_loss = sg_loss(
         filtered_model_logits,
         y_logits_t / args.input_lgt_temp,
-        mask_t.bool() & z_mask.bool(),  # topk mask & keyword mask
+        keywords_mask,
         args.sg_gamma,
-        mean_batch=False)
+    )
 
-    return mask_t, lr_nll_loss
+    return mask_t, sg_loss
 
 
 def sentence_ngram_similarity_constraint(y_logits_t, target_sent_id, max_ngram=4):

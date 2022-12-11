@@ -20,19 +20,30 @@ def getNovelMask(target, vocab_size):
     return novel_mask
 
 
-def sg_loss(logits, target, novel_mask, gamma, mean_batch=True):
+def sg_loss(logits_perturbed, logits, mask, gamma, eps=1e-8, mean_batch=False):
+    """
+    ScaleGrad loss.
+    https://github.com/shawnlimn/ScaleGrad
+
+    Args:
+        logits_perturbed: reference logit from oracle LM, analogous to target.
+        logits: current COLD logit under optimization.
+        mask: mask for "novel" tokens in original implementation; here, for any token
+            we want to include in the next steps.
+        gamma: rescaling factor in ScaleGrad (args.sg_gamma)
+        eps: epsilon; a small number to bypass numerical instability.
+    """
     # ScaleGrad
     ##########################################################
     probs = F.softmax(logits, dim=-1)  # [B, T]
     # novel_mask = getNovelMask(target[0].unsqueeze(0), logits.size(-1))
 
-    new_probs = (probs * novel_mask) * gamma + (probs * ~novel_mask) + 1e-8
+    new_probs = (probs * mask) * gamma + (probs * ~mask) + eps
     new_probs = F.normalize(new_probs, p=1, dim=-1)
     lprobs = torch.log(new_probs)  # [B, T]
     ##########################################################
-
-    loss = F.nll_loss(lprobs, target, reduction='none')  # [B, T]
-    loss = loss.sum(-1)  # [B,]
+    target_p = F.softmax(logits_perturbed, dim=-1)
+    loss = -(target_p * lprobs).sum(dim=-1)  # [B,]
     if mean_batch:
         loss = loss.mean(-1)  # scalar
 
