@@ -27,8 +27,8 @@ from transformers import AutoTokenizer, GPT2LMHeadModel, T5ForConditionalGenerat
 
 from attribute_classifier.attribute_classifier_model import DoubleHeadModel
 from constraints import (attr_control_constraint, expert_activation_constraint, fluency_constraint,
-                         keyword_lexical_constraint, right_context_pred_constraint,
-                         sentence_ngram_similarity_constraint)
+                         keyword_lexical_constraint, keyword_sg_constraint,
+                         right_context_pred_constraint, sentence_ngram_similarity_constraint)
 from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
                   initialize, lm_score_from_logits, one_hot, post_process, post_sent,
                   rank_and_filter, set_random_seeds, to_device, top_k_filter_3d)
@@ -244,7 +244,9 @@ def options():
     parser.add_argument("--optimize_hidden_states",
                         action='store_true',
                         help="optimize not the logit space, but the hidden state space")
-
+    # scale grad
+    # https://github.com/shawnlimn/ScaleGrad/blob/b2685f9c8680e731316ca6149c1171fda7af5ead/custom/gpt2/run_gpt2.py
+    parser.add_argument("--sg_gamma", type=float, default=1.)
     args = parser.parse_args()
     return args
 
@@ -486,6 +488,21 @@ def decode(model,
             kw_loss = keyword_lexical_constraint(y_logits_t, keywords_encoded)
             constraint_loss["keyword"] = kw_loss * args.keyword_weight
 
+        elif "keyword_sg" in constraint_functions and args.keyword_weight > 0:
+            # keyword constraint using scale grad loss
+            kw_sg_loss = keyword_sg_constraint(
+                model,
+                args,
+                y_logits_t,
+                soft_forward_x,
+                x_model_past,
+                mask_t=mask_t,
+                z_mask=z_mask,
+                temperature=args.fluency_temp,
+                straight_through=args.straight_through,
+            )
+            constraint_loss["keyword"] = kw_sg_loss * args.keyword_weight
+
         if "attr_control" in constraint_functions and args.attr_control_weight > 0:
             # attribute control with classifer gradients
             # TODO: optimize_hidden_states
@@ -519,7 +536,7 @@ def decode(model,
                 straight_through=args.straight_through,
             )
 
-            constraint_loss["keyword"] = expert_loss * args.selfcond_weight
+            constraint_loss["selfcond"] = expert_loss * args.selfcond_weight
 
         c_loss = sum(constraint_loss.values())
 

@@ -289,16 +289,11 @@ def soft_distance(logits_perturbed, logits):
     return torch.nn.MSELoss()(logits_perturbed, logits)
 
 
-def soft_nll(logits_perturbed, logits):
+def soft_nll(logits_perturbed, logits, detach=False):
     p = F.softmax(logits_perturbed, dim=-1)
+    p = p.detach() if detach else p
     logp = F.log_softmax(logits, dim=-1)
     return -(p * logp).sum(dim=-1).mean(dim=-1)
-
-
-def soft_nll_detach(logits_perturbed, logits):
-    p = F.softmax(logits_perturbed, dim=-1).detach()
-    logp = F.log_softmax(logits, dim=-1)
-    return -(p * logp).sum(dim=-1).mean()
 
 
 def additional_nll(logits, cur_text_ids):
@@ -661,28 +656,28 @@ def has_repeat(sents_for_substr, sents_for_sent):
     return has_repeat_substring or _has_repeat_sent(sents_for_sent)
 
 
-def write_json_lines(json_lines, fout, model, tokenizer, device):
-    with open(fout, 'w') as fw:
-        for line in json_lines:
-            input_text = line['generation_complete'][0][0]
-            # input_text = line['counterfactual']
+# def write_json_lines(json_lines, fout, model, tokenizer, device):
+#     with open(fout, 'w') as fw:
+#         for line in json_lines:
+#             input_text = line['generation_complete'][0][0]
+#             # input_text = line['counterfactual']
 
-            ori_ending = line['original_ending']
-            ori_endings = tokenize.sent_tokenize(ori_ending)
-            z = ori_endings[0].strip()
+#             ori_ending = line['original_ending']
+#             ori_endings = tokenize.sent_tokenize(ori_ending)
+#             z = ori_endings[0].strip()
 
-            gens = line['generation_complete'][0][1]
-            proc_gens = [post_sent(x) for x in gens]
-            pg_dict, gens_ranked, pg_dict_top, gens_ranked_top = process_batching_counterfactual_outputs(
-                proc_gens, input_text, z, model, tokenizer, device)
-            line['proced'] = proc_gens
-            line['ppl_gens'] = pg_dict
-            line['gens_ranked'] = gens_ranked
-            line['ppl_gens_top'] = pg_dict_top
-            line['gens_ranked_top'] = gens_ranked_top
-            # print(line)
-            # exit()
-            fw.write(json.dumps(line) + '\n')
+#             gens = line['generation_complete'][0][1]
+#             proc_gens = [post_sent(x) for x in gens]
+#             pg_dict, gens_ranked, pg_dict_top, gens_ranked_top = process_batching_counterfactual_outputs(
+#                 proc_gens, input_text, z, model, tokenizer, device)
+#             line['proced'] = proc_gens
+#             line['ppl_gens'] = pg_dict
+#             line['gens_ranked'] = gens_ranked
+#             line['ppl_gens_top'] = pg_dict_top
+#             line['gens_ranked_top'] = gens_ranked_top
+#             # print(line)
+#             # exit()
+#             fw.write(json.dumps(line) + '\n')
 
 
 def compute_ppl_line(model, tokenizer, device, line):
