@@ -918,7 +918,7 @@ def lexical_generation(model,
                                                    sent_constraint=". " + constraints,
                                                    keyword_constraint=constraints,
                                                    constraint_functions=('right_context_pred',
-                                                                         'keyword'),
+                                                                         'keyword_sg'),
                                                    device=device,
                                                    model_back=model_back,
                                                    **expert_kwargs)

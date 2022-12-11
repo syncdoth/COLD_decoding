@@ -52,7 +52,7 @@ def fluency_constraint(model,
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
     x_model_past: the past kv pairs of the LM cached from the left prompt.
     mask_t: mask for filtering topk logits.
-    z_mask: the lexical constraint sequence (or keywords).  [V,]
+    z_mask: the lexical constraint sequence (or keywords).  [B, T, V]
     z_onehot: the lexical constraint sequence's one-hot encoded version. [B, T, V]
     temperature: temperature for the softmax over the current logit `y_logits_t`.
         Default=0.001, which makes the logit commit only to top 1~2 tokens, by
@@ -140,7 +140,7 @@ def keyword_sg_constraint(model,
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
     x_model_past: the past kv pairs of the LM cached from the left prompt.
     mask_t: mask for filtering topk logits.
-    z_mask: the lexical constraint sequence (or keywords).  [V,]
+    z_mask: the lexical constraint sequence (or keywords).  [B, T, V]
     temperature: temperature for the softmax over the current logit `y_logits_t`.
         Default=0.001, which makes the logit commit only to top 1~2 tokens, by
         making the softmax distribution very sharp.
@@ -167,19 +167,15 @@ def keyword_sg_constraint(model,
                                             mask=mask_t,
                                             extra_mask=z_mask)
 
-    bs = y_logits_t.shape[0]
-    keywords_mask = z_mask.unsqueeze(0).repeat(bs, 1).bool()
-    if include_topk_mask:
-        keywords_mask = keywords_mask | mask_t.bool()
-
-    sg_loss = sg_loss(
+    keywords_mask = z_mask.bool() | mask_t.bool() if include_topk_mask else z_mask.bool()
+    loss = sg_loss(
         filtered_model_logits,
         y_logits_t / args.input_lgt_temp,
         keywords_mask,
         args.sg_gamma,
     )
 
-    return mask_t, sg_loss
+    return loss
 
 
 def sentence_ngram_similarity_constraint(y_logits_t, target_sent_id, max_ngram=4):
@@ -272,7 +268,7 @@ def attr_control_constraint(model,
     soft_forward_x: The last token of left context in one-hot mode; [B, 1, V]
     x_model_past: the past kv pairs of the LM cached from the left prompt.
     mask_t: mask for filtering topk logits.
-    z_mask: the lexical constraint sequence (or keywords).  [V,]
+    z_mask: the lexical constraint sequence (or keywords).  [B, T, V]
     z_onehot: the lexical constraint sequence's one-hot encoded version. [B, T, V]
     temperature: temperature for the softmax over the current logit `y_logits_t`.
         Default=0.3, which does not result a very sharp distribution.
