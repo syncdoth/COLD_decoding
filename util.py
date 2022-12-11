@@ -237,6 +237,40 @@ def decode_with_model_topk(model, y_logits, topk, x_onehot, x_past, tokenizer, e
         tokenizer,
         topk=topk)
 
+def geometric_mean_fusion(model, y_logits, topk, x_onehot, x_past, tokenizer, gamma=0.8, extra_mask=None):
+    assert x_onehot.shape[1] == 1, x_onehot.shape
+    length = y_logits.shape[1]
+    past = x_past
+    input_embeds = torch.matmul(x_onehot.float(), model.get_input_embeddings().weight)
+    out_probs_all = None
+    for i in range(length):
+        model_outputs = model(past_key_values=past, inputs_embeds=input_embeds)
+        past = model_outputs.past_key_values
+        logits_t = model_outputs.logits[:, -1:, :]  # [B, 1, V]
+        y_logits_i = y_logits[:, i:i + 1, :]  # [B, 1, V]
+        assert logits_t.shape[1] == 1, logits_t.shape
+
+        probs_t = F.softmax(logits_t, dim=-1)
+        y_probs_i = F.softmax(y_logits_i, dim=-1)
+        next_logits_prob = torch.pow(y_probs_i, gamma) * torch.pow(probs_t, 1 - gamma)  # [B, 1, V]
+        out_probs_all = next_logits_prob if out_probs_all is None else torch.cat(
+            (out_probs_all, next_logits_prob), dim=1)
+        if i < length - 1:
+            if extra_mask is None:
+                next_logits_topk = top_k_filter_3d(next_logits_prob,
+                                                  topk,
+                                                  probs=True) / 0.001
+            else:
+                next_logits_topk = top_k_filter_3d(next_logits_prob,
+                                                  topk,
+                                                  probs=True,
+                                                  extra_mask=extra_mask[:, i:i + 1, :]) / 0.001
+            input_embeds = torch.matmul(F.softmax(next_logits_topk, dim=-1),
+                                        model.get_input_embeddings().weight)
+    return get_text_from_logits(
+        top_k_filter_3d(out_probs_all, topk, probs=True, extra_mask=extra_mask),
+        tokenizer,
+        topk=topk)
 
 def post_process(text_ids, model, max_length, length, tokenizer, device):
     # sentence completion

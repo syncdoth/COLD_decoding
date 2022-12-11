@@ -29,7 +29,7 @@ from attribute_classifier.attribute_classifier_model import DoubleHeadModel
 from constraints import (attr_control_constraint, expert_activation_constraint, fluency_constraint,
                          keyword_lexical_constraint, keyword_sg_constraint,
                          right_context_pred_constraint, sentence_ngram_similarity_constraint)
-from util import (decode_with_model_topk, freeze_module, get_keywords, get_text_from_logits,
+from util import (decode_with_model_topk, freeze_module, geometric_mean_fusion, get_keywords, get_text_from_logits,
                   initialize, lm_score_from_logits, one_hot, post_process, post_sent,
                   rank_and_filter, set_random_seeds, to_device, top_k_filter_3d)
 
@@ -79,11 +79,12 @@ def options():
                         type=str,
                         default="model_over_cold",
                         choices=[
-                            "raw", "cold_over_model", "model_over_cold"
+                            "raw", "cold_over_model", "model_over_cold", "geometric"
                             ],
                         help="* raw: simple topk over COLD logits"
                              "* cold_over_model: gpt prob is used to rank cold logits"
-                             "* model_over_cold: cold prob is used to rank gpt prob")
+                             "* model_over_cold: cold prob is used to rank gpt prob"
+                             "* geometric: geometric fusion from PPLM")
     parser.add_argument("--force_tokens", action="store_true")
     # model
     parser.add_argument("--batch-size", type=int, default=1)
@@ -247,6 +248,8 @@ def options():
     # scale grad
     # https://github.com/shawnlimn/ScaleGrad/blob/b2685f9c8680e731316ca6149c1171fda7af5ead/custom/gpt2/run_gpt2.py
     parser.add_argument("--sg_gamma", type=float, default=1.)
+    # geometric mean fusion
+    parser.add_argument("--geometric_gamma", type=float, default=0.8)
     args = parser.parse_args()
     return args
 
@@ -560,6 +563,15 @@ def decode(model,
                     top_k_filter_3d(y_logits_t, args.topk, extra_mask=z_mask),
                     tokenizer,
                     topk=args.topk)
+            elif args.discretize_method == 'geometric':
+                text, ppl, _ = geometric_mean_fusion(model,
+                                                     y_logits_t,
+                                                     args.topk,
+                                                     soft_forward_x,
+                                                     x_model_past,
+                                                     tokenizer,
+                                                     gamma=args.geometric_gamma,
+                                                     extra_mask=z_mask)
             else:
                 assert args.discretize_method in ('cold_over_model', 'model_over_cold')
                 topk_from_model = args.discretize_method == 'model_over_cold'
@@ -629,6 +641,15 @@ def decode(model,
             top_k_filter_3d(y_logits_t, args.topk, extra_mask=z_mask),
             tokenizer,
             topk=args.topk)
+    elif args.discretize_method == 'geometric':
+        text, ppl, last_text_ids = geometric_mean_fusion(model,
+                                             y_logits_t,
+                                             args.topk,
+                                             soft_forward_x,
+                                             x_model_past,
+                                             tokenizer,
+                                             gamma=args.geometric_gamma,
+                                             extra_mask=z_mask)
     else:
         assert args.discretize_method in ('cold_over_model', 'model_over_cold')
         topk_from_model = args.discretize_method == 'model_over_cold'
