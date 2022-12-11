@@ -105,10 +105,12 @@ def get_text_from_logits(logits, tokenizer, topk=1):
 
     bs = logits.shape[0]
     for i in range(logits.shape[1]):
-        if topk > 1:
-            last = _topk(logits[:, i, :], topk)
-        else:
-            last = _greedy(logits[:, i, :])  # [B, 1]
+        # if topk > 1:
+        #     last = _topk(logits[:, i, :], topk)
+        # else:
+        # NOTE: in the original code, they used greedy in the end. To not change
+        # the default behavior, commented out above code.
+        last = _greedy(logits[:, i, :])  # [B, 1]
         output_so_far = last if output_so_far is None else torch.cat((output_so_far, last), dim=1)
         logp_logits = logits[:, i, :].log_softmax(-1).data.cpu().numpy()
         logp += logp_logits[range(bs), last.squeeze(-1).data.cpu().numpy()]
