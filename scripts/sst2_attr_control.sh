@@ -25,8 +25,11 @@ function control_gen() {
 		--lr-nll-portion 1.0 \
 		--topk 5 \
 		--output-lgt-temp 1 \
+		--constraint-temp 1 \
+		--discretize_method model_over_cold \
 		--verbose \
-		--straight-through  \
+		--straight-through \
+		--no_fluency_mask_in_attr_control \
 		--gs_std 0.01 \
 		--large-noise-iters 50,500,1000,1500 \
 		--large_gs_std 1,0.5,0.1,0.05  \
@@ -51,13 +54,14 @@ function control_gen() {
 
 lr=0.1
 prompts_file="data/pplm_prompts.txt"
-while IFS= read -r prompt; do
-# for prompt in "The chicken" "The country"; do   # simple case
-	for cw in 0 0.2 0.4 0.6 0.8 1.0; do
+# while IFS= read -r prompt; do
+for prompt in "The chicken" "The country"; do   # simple case
+	for cw in 0 0.4 0.6 0.8; do
 		# positive
 		control_gen "$prompt" "pplm_prompt-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_pos-pool_last" 1 $cw $lr
 
 		# negative
 		control_gen "$prompt" "pplm_prompt-cw$cw-lr$lr-gpt2-xl-ctrl_sst2_neg-pool_last" 0 $cw $lr
 	done
-done < "$prompts_file"
+done
+# done < "$prompts_file"
