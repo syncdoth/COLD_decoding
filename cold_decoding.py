@@ -389,7 +389,7 @@ def decode(model,
         if not args.wandb_runname:
             args.wandb_runname = f'{args.mode}-{round(time.time() * 1000)}'
         experiment = wandb.init(project=args.wandb_project, name=args.wandb_runname, config=args)
-        text_table = wandb.Table(columns=["step", "prompt", "generation", "ppl"])
+        text_table = wandb.Table(columns=["step", "prompt", "keywords", "generation", "ppl"])
 
     assert args.prefix_length <= 0  # Otherwise not compatible with batch mode
 
@@ -579,7 +579,7 @@ def decode(model,
                           f"ppl: {ppl[bi]:.4f}, "
                           f"lr: {last_lr:.4f}, |{text[bi]}|")
                 if args.wandb:
-                    text_table.add_data(it + 1, prompt, text[bi], ppl[bi].item())
+                    text_table.add_data(it + 1, prompt, keyword_constraint, text[bi], ppl[bi].item())
 
         if args.wandb:
             log_items = {
@@ -653,7 +653,7 @@ def decode(model,
                 print(f"[final]: {txt}\n{ppl:.4f}")
                 print(f"[final complete sentence]: {post}\n")
             if args.wandb:
-                text_table.add_data(args.num_iters + 1, prompt, post, ppl)
+                text_table.add_data(args.num_iters + 1, prompt, keyword_constraint, post, ppl)
 
     if args.wandb:
         experiment.log({"generated texts": text_table})
@@ -889,7 +889,7 @@ def lexical_generation(model,
                        outfile='output.json',
                        **expert_kwargs):
     fw_pretty = open(os.path.join(args.output_dir, 'pretty_' + outfile), 'w')
-
+    wandb_runname_base = args.wandb_runname
     for i, d in enumerate(data):
         if i < args.start or i > args.end:
             continue
@@ -899,7 +899,8 @@ def lexical_generation(model,
         print(f"{i} / {len(data)}")
         text_candidates = []
         text_complete_candidates = []
-        for _ in range(args.repeat_batch):
+        for j in range(args.repeat_batch):
+            args.wandb_runname = f"{wandb_runname_base}-sent{i}-trial{j}"
             if args.force_tokens:
                 force_tokens = tokenizer.encode(constraints)
                 sequence_ids = model.generate(max_new_tokens=args.max_length,
