@@ -501,8 +501,9 @@ def decode(model,
                 x_model_past,
                 mask_t=mask_t,
                 z_mask=z_mask,
-                temperature=args.fluency_temp,
+                temperature=args.constraint_temp,
                 straight_through=args.straight_through,
+                include_topk_mask=args.constraint_weight == 1,
             )
             constraint_loss["keyword"] = kw_sg_loss * args.keyword_weight
 
