@@ -340,25 +340,51 @@ def embedding_fluency_constraint(model,
     opt_embeds = inputs_embeds[:, opt_start_idx:opt_end_idx or None]   # [B, T - 1, V]
 
     # compute loss
-    logprob = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature
+    if model.config.tie_word_embeddings:
+        logprob = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature
 
-    maxlogit = opt_model_logits.max(dim=-1, keepdim=False).values
-    logits_sub_max = opt_model_logits - maxlogit.unsqueeze(-1)
+        maxlogit, maxlogit_idx = opt_model_logits.max(dim=-1, keepdim=False)
+        logits_sub_max = opt_model_logits - maxlogit.unsqueeze(-1)
 
-    grad_version = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature - maxlogit
-    detached = (opt_hidden_states * opt_embeds.detach()).sum(dim=-1) / temperature - maxlogit
-    additive = grad_version.exp() - detached.exp()  # NOTE: unstable
-    lognorm = torch.log(logits_sub_max.exp().sum(dim=-1) + additive) + maxlogit  # NOTE: unstable
+        # ver1 (original)  # NOTE: exp() are unstable
+        # grad_version = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature - maxlogit
+        # detached = (opt_hidden_states * opt_embeds.detach()).sum(dim=-1) / temperature - maxlogit
+        # additive = grad_version.exp() - detached.exp()
+        # lognorm = torch.log(logits_sub_max.exp().sum(dim=-1) + additive) + maxlogit
 
-    loss = -logprob + lognorm
-    loss = loss.mean(-1)  # [B,]
+        # ver2 (stable)
+        # lognorm = torch.logsumexp(opt_model_logits, dim=-1)
 
-    # extra NLL Loss
-    # if right_context_ids is not None:
-    #     right_pred_loss = torch.nn.functional.cross_entropy(
-    #         model_logits[:, -right_context_ids.shape[1] - 1:-1].permute(0, 2, 1),
-    #         right_context_ids,
-    #         reduction='mean')
-    #     loss += right_pred_loss
+        # ver3 (unstable)
+        # log_p = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature
+        # lognorm = torch.log(opt_model_logits.exp().sum(-1) + log_p.exp() - maxlogit.exp())
+
+        # ver4 (stable)
+        # log_p = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature - maxlogit
+        # lognorm = torch.logsumexp(
+        #     torch.cat([logits_sub_max, log_p.unsqueeze(-1)], dim=-1), dim=-1) + maxlogit
+
+        # ver5 = substitute (stable)
+        log_p = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature
+        bs, t = maxlogit_idx.size()
+        idx = (torch.arange(0, bs).repeat_interleave(t),
+            torch.arange(0, t).repeat(bs),
+            maxlogit_idx.view(-1))
+        opt_model_logits[idx] = log_p
+        lognorm = torch.logsumexp(opt_model_logits, dim=-1)
+
+
+        loss = -logprob + lognorm
+        loss = loss.mean(-1)  # [B,]
+
+        # extra NLL Loss
+        # if right_context_ids is not None:
+        #     right_pred_loss = torch.nn.functional.cross_entropy(
+        #         model_logits[:, -right_context_ids.shape[1] - 1:-1].permute(0, 2, 1),
+        #         right_context_ids,
+        #         reduction='mean')
+        #     loss += right_pred_loss
+    else:
+        raise NotImplementedError
 
     return loss
