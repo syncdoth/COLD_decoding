@@ -291,3 +291,74 @@ def attr_control_constraint(model,
     classifier_probs = torch.softmax(classifier_logits, dim=-1)
     # since we want to maximize this, negative here
     return 1 - classifier_probs[:, attribute_class_idx]
+
+
+# embedding space
+def embedding_fluency_constraint(model,
+                                 inputs_embeds,
+                                 args,
+                                 left_context_ids=None,
+                                 right_context_ids=None,
+                                 is_encoder_decoder=False,
+                                 temperature=1.0):
+    del args  # unused
+    # extra input context management
+    if left_context_ids is not None:
+        if is_encoder_decoder:
+            encoder_input_ids = left_context_ids
+        else:
+            left_embed = model.get_input_embeddings()(left_context_ids).detach()
+            inputs_embeds = torch.cat([left_embed, inputs_embeds], dim=1)
+    if right_context_ids is not None:
+        right_embed = model.get_input_embeddings()(right_context_ids).detach()  # [B, T, E]
+        inputs_embeds = torch.cat([inputs_embeds, right_embed], dim=1)
+
+    # model forward
+    if is_encoder_decoder:
+        outs = model(input_ids=encoder_input_ids,
+                     decoder_inputs_embeds=inputs_embeds,
+                     output_hidden_states=True)
+        model_logits = outs.logits  # [B, T, V]
+        hidden_states = outs.decoder_hidden_states[-1]  # [B, T, E]
+        if model.config.tie_word_embeddings:
+            hidden_states = hidden_states * (model.model_dim**-0.5)
+    else:
+        outs = model(inputs_embeds=inputs_embeds, output_hidden_states=True)
+        model_logits = outs.logits  # [B, T, V]
+        hidden_states = outs.hidden_states[-1]  # [B, T, E]
+
+
+    # NOTE: dotplusplus from mucola
+    opt_start_idx = 1
+    opt_end_idx = 0
+    if not is_encoder_decoder and left_context_ids is not None:
+        opt_start_idx = left_context_ids.shape[1]
+    # if right_context_ids is not None:
+    #     opt_end_idx = -right_context_ids.shape[1]
+    opt_hidden_states = hidden_states[:, opt_start_idx - 1:opt_end_idx - 1]  # [B, T - 1, E]
+    opt_model_logits = model_logits[:, opt_start_idx - 1:opt_end_idx - 1]    # [B, T - 1, V]
+    opt_embeds = inputs_embeds[:, opt_start_idx:opt_end_idx or None]   # [B, T - 1, V]
+
+    # compute loss
+    logprob = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature
+
+    maxlogit = opt_model_logits.max(dim=-1, keepdim=False).values
+    logits_sub_max = opt_model_logits - maxlogit.unsqueeze(-1)
+
+    grad_version = (opt_hidden_states * opt_embeds).sum(dim=-1) / temperature - maxlogit
+    detached = (opt_hidden_states * opt_embeds.detach()).sum(dim=-1) / temperature - maxlogit
+    additive = grad_version.exp() - detached.exp()  # NOTE: unstable
+    lognorm = torch.log(logits_sub_max.exp().sum(dim=-1) + additive) + maxlogit  # NOTE: unstable
+
+    loss = -logprob + lognorm
+    loss = loss.mean(-1)  # [B,]
+
+    # extra NLL Loss
+    # if right_context_ids is not None:
+    #     right_pred_loss = torch.nn.functional.cross_entropy(
+    #         model_logits[:, -right_context_ids.shape[1] - 1:-1].permute(0, 2, 1),
+    #         right_context_ids,
+    #         reduction='mean')
+    #     loss += right_pred_loss
+
+    return loss

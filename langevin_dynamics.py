@@ -4,7 +4,6 @@ from typing import Union, List, Tuple, Callable, Dict
 import torch
 from torch import nn
 
-from constraints import embedding_quantization
 from schedulers import (StepWiseNoiseScheduler, GeometricNoiseScheduler,
                         get_constant_schedule_with_warmup)
 from util import in_notebook
@@ -13,6 +12,38 @@ if in_notebook:
     from tqdm.notebook import tqdm
 else:
     from tqdm import tqdm
+
+
+def embedding_quantization(embedding_module: nn.Embedding,
+                           inputs_embeds: torch.Tensor,
+                           eps: nn.Parameter = None,
+                           return_logits: bool = False):
+    """
+    embedding_module: weight.shape = [V, E]
+    inputs_embeds: [B, T, E]
+    eps: [B, T, E]
+    """
+    if eps is not None:
+        with torch.no_grad():
+            optimized_embeds = inputs_embeds + eps
+    else:
+        optimized_embeds = inputs_embeds
+    # [1, B * T, V]
+    distances = torch.cdist(optimized_embeds.view(1, -1, optimized_embeds.shape[-1]),
+                            embedding_module.weight.unsqueeze(0))
+    # [B, T, V]
+    distances = distances.view(optimized_embeds.shape[0], optimized_embeds.shape[1], -1)
+    quantized_ids = distances.min(-1).indices  # [B, T]
+    quantized_embeds = embedding_module(quantized_ids)  # [B, T, E]
+
+    if eps is not None:
+        with torch.no_grad():
+            quantized_embeds = quantized_embeds - eps
+
+    if return_logits:
+        return quantized_ids, quantized_embeds, -distances
+
+    return quantized_ids, quantized_embeds
 
 
 def langevin_optimize(model: nn.Module,
