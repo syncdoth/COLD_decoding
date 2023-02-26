@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 from bleuloss import batch_log_bleulosscnn_ae
 from scale_grad import sg_loss
@@ -293,6 +294,31 @@ def attr_control_constraint(model,
     return 1 - classifier_probs[:, attribute_class_idx]
 
 
+def emb_attr_control_constraint(model,
+                                inputs_embeds,
+                                args,
+                                left_context_ids=None,
+                                right_context_ids=None,
+                                is_encoder_decoder=False,
+                                pool_method='last',
+                                attribute_class_idx=1):
+
+    if left_context_ids is not None:
+        if is_encoder_decoder:
+            encoder_input_ids = left_context_ids
+        else:
+            left_embed = model.get_input_embeddings()(left_context_ids).detach()
+            inputs_embeds = torch.cat([left_embed, inputs_embeds], dim=1)
+    if right_context_ids is not None:
+        right_embed = model.get_input_embeddings()(right_context_ids).detach()  # [B, T, E]
+        inputs_embeds = torch.cat([inputs_embeds, right_embed], dim=1)
+
+    _,  classifier_logits = model(inputs_embeds=inputs_embeds, pool_method=pool_method, return_scorer=True)
+
+    classifier_probs = torch.softmax(classifier_logits, dim=-1)
+    # since we want to maximize this, negative here
+    return 1 - classifier_probs[:, attribute_class_idx]
+
 # embedding space
 def embedding_fluency_constraint(model,
                                  inputs_embeds,
@@ -300,6 +326,7 @@ def embedding_fluency_constraint(model,
                                  left_context_ids=None,
                                  right_context_ids=None,
                                  is_encoder_decoder=False,
+                                 target_ids=None,
                                  temperature=1.0):
     del args  # unused
     # extra input context management
@@ -324,6 +351,8 @@ def embedding_fluency_constraint(model,
             hidden_states = hidden_states * (model.model_dim**-0.5)
     else:
         outs = model(inputs_embeds=inputs_embeds, output_hidden_states=True)
+        if len(outs) == 2:
+            outs, _ = outs
         model_logits = outs.logits  # [B, T, V]
         hidden_states = outs.hidden_states[-1]  # [B, T, E]
 
@@ -385,6 +414,58 @@ def embedding_fluency_constraint(model,
         #         reduction='mean')
         #     loss += right_pred_loss
     else:
-        raise NotImplementedError
+        loss = F.cross_entropy(opt_model_logits.permute(0, 2, 1), target_ids[:, 1:])
+
+    return loss
+
+
+# vocab space
+def simplex_fluency_constraint(model,
+                               input_logits,
+                               args,
+                               left_context_ids=None,
+                               right_context_ids=None,
+                               is_encoder_decoder=False,
+                               target_ids=None,
+                               temperature=1.0):
+    del args  # unused
+    # extra input context management
+    left_past = None
+    if left_context_ids is not None:
+        if is_encoder_decoder:
+            encoder_input_ids = left_context_ids
+        else:
+            left_past = model(input_ids=left_context_ids[:, :-1], return_dict=True).past_key_values
+    else:
+        raise ValueError("left_context_ids must not be None for now")
+    if right_context_ids is not None:
+        right_logits = F.one_hot(right_context_ids, model.config.vocab_size)
+        input_logits = torch.cat([input_logits, right_logits.float()], dim=1)
+
+    inputs_embeds = F.gumbel_softmax(input_logits, hard=True) @ model.get_input_embeddings().weight
+    # model forward
+    if is_encoder_decoder:
+        bos_embed = model.get_input_embeddings()(
+            torch.LongTensor([[model.config.bos_token_id]]).to(inputs_embeds.device))
+        inputs_embeds = torch.cat([bos_embed, inputs_embeds], dim=1)
+        outs = model(input_ids=encoder_input_ids,
+                     decoder_inputs_embeds=inputs_embeds,
+                     output_hidden_states=True)
+        model_logits = outs.logits  # [B, T, V]
+    else:
+        left_final_token_emb = model.get_input_embeddings()(left_context_ids[:, -1:])
+        inputs_embeds = torch.cat([left_final_token_emb, inputs_embeds], dim=1)
+        outs = model(inputs_embeds=inputs_embeds,
+                     past_key_values=left_past,
+                     output_hidden_states=True)
+        model_logits = outs.logits  # [B, T, V]
+
+    # compute loss
+    opt_start_idx = 0
+    if not is_encoder_decoder and left_context_ids is not None:
+        opt_start_idx = left_context_ids.shape[1] - 1
+    opt_model_logits = model_logits[:, opt_start_idx:-1]    # [B, T - 1, V]
+
+    loss = soft_nll(opt_model_logits, input_logits)
 
     return loss

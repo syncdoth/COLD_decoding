@@ -20,6 +20,15 @@ from nltk.corpus import stopwords
 from bleuloss import batch_log_bleulosscnn_ae
 
 
+def logsumexp(tensor, dim=-1, mask=None):
+        if mask is None:
+            return torch.logsumexp(tensor, dim=dim)
+
+        assert mask.shape == tensor.shape, 'The factors tensor should have the same shape as the original'
+        # a = torch.cat([torch.max(tensor, dim, keepdim=True) for _ in range(tensor.shape[dim])], dim)
+        a = tensor.max(dim, keepdim=True)
+        return a + torch.sum((tensor - a).exp() * mask, dim).log()
+
 def in_notebook():
     try:
         from IPython import get_ipython
